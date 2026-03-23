@@ -17,6 +17,7 @@ from ballsdex.core.models import (
     Special,
     Trade,
     TradeObject,
+    Ball,
     balls,
 )
 from ballsdex.core.utils.buttons import ConfirmChoiceView
@@ -1002,3 +1003,360 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             await interaction.followup.send(embed=embed, file=file)
         else:
             await interaction.followup.send(embed=embed)
+
+    @app_commands.command()
+    @app_commands.checks.cooldown(1, 60, key=lambda i: i.user.id)
+    async def drop(
+        self,
+        interaction: discord.Interaction["BallsDexBot"],
+        countryball: BallInstanceTransform,
+        special: SpecialEnabledTransform | None = None,
+    ):
+        """
+        Drop a countryball from your inventory for others to catch.
+
+        Parameters
+        ----------
+        countryball: BallInstance
+            The countryball you want to drop
+        special: Special
+            Filter the results of autocompletion to a special event. Ignored afterwards.
+        """
+        if not countryball:
+            await interaction.response.send_message(
+                f"You don't have this {settings.collectible_name}.", ephemeral=True
+            )
+            return
+        
+        if not countryball.is_tradeable:
+            await interaction.response.send_message(
+                f"You cannot drop this {settings.collectible_name}.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        if countryball.favorite:
+            view = ConfirmChoiceView(
+                interaction,
+                accept_message=f"{settings.collectible_name.title()} dropped successfully.",
+                cancel_message="Drop cancelled.",
+            )
+            await interaction.followup.send(
+                f"This {settings.collectible_name} is a favorite, "
+                "are you sure you want to drop it?",
+                view=view,
+                ephemeral=True,
+            )
+            await view.wait()
+            if not view.value:
+                return
+
+        if await countryball.is_locked():
+            await interaction.followup.send(
+                f"This {settings.collectible_name} is currently in an active trade or donation, "
+                "please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            from ballsdex.packages.countryballs.countryball import BallSpawnView
+            from ballsdex.core.models import BallInstance
+            
+            # Refresh the BallInstance with prefetched Ball to avoid QuerySet issues
+            countryball = await BallInstance.get(id=countryball.id).prefetch_related('ball', 'player')
+            
+            # from_existing will lock the item itself
+            spawn_view = await BallSpawnView.from_existing(self.bot, countryball)
+            
+            channel = cast(discord.TextChannel, interaction.channel)
+            success = await spawn_view.spawn(channel)
+            
+            if success:
+                await interaction.followup.send(
+                    f"You dropped **{countryball.countryball.country}**! "
+                    f"Anyone can now catch it, including you (but that would be cheap!).",
+                    ephemeral=True,
+                )
+            else:
+                await countryball.unlock()
+                await interaction.followup.send(
+                    f"Failed to drop the {settings.collectible_name}. Please try again.",
+                    ephemeral=True,
+                )
+        except Exception as e:
+            # Ensure the item is unlocked if ANY error occurs
+            await countryball.unlock()
+            log.error(f"Error in drop command for {countryball}: {e}")
+            await interaction.followup.send(
+                f"An error occurred while dropping the {settings.collectible_name}. "
+                f"It has been returned to your inventory.",
+                ephemeral=True,
+            )
+
+    @app_commands.command()
+    async def leaderboard(self, interaction: discord.Interaction["BallsDexBot"]):
+        """
+        Display the top 10 players ranked by NBA count globally.
+        """
+        await interaction.response.defer(thinking=True)
+
+        try:
+            # Get all players with their NBA counts
+            players = await Player.all().prefetch_related("balls")
+            
+            # Count NBAs for each player and sort
+            player_counts = []
+            for player in players:
+                count = len(player.balls)
+                if count > 0:  # Only include players with at least 1 NBA
+                    player_counts.append((player, count))
+            
+            # Sort by count descending and take top 10
+            top_10 = sorted(player_counts, key=lambda x: x[1], reverse=True)[:10]
+            
+            if not top_10:
+                await interaction.followup.send(
+                    "No players found with any NBAs yet.",
+                    ephemeral=True,
+                )
+                return
+
+            # Calculate global stats
+            total_collected = sum(count for _, count in top_10)
+            max_count = top_10[0][1] if top_10 else 0
+
+            # Create embed with professional styling
+            embed = discord.Embed(
+                title="🏆 NBA COLLECTORS LEADERBOARD",
+                color=0x1f8b4c,  # Professional green
+            )
+            
+            # Add header with stats
+            embed.add_field(
+                name="📊 GLOBAL STATS",
+                value=f"**Top Players:** {len(top_10)}\n**Total Collected:** {total_collected}\n**Highest:** {max_count}",
+                inline=False
+            )
+
+            # Build leaderboard
+            leaderboard_text = ""
+            medals = ["🥇", "🥈", "🥉"]
+            
+            for idx, (player, count) in enumerate(top_10, 1):
+                try:
+                    user = await self.bot.fetch_user(player.discord_id)
+                    name = user.name
+                except discord.NotFound:
+                    name = "Unknown User"
+                
+                # Determine medal for top 3
+                medal = medals[idx - 1] if idx <= 3 else f"#{idx}"
+                
+                leaderboard_text += f"{medal} {name} · **{count}**\n"
+            
+            embed.add_field(
+                name="🏅 RANKINGS",
+                value=leaderboard_text,
+                inline=False
+            )
+            
+            embed.set_footer(text="Global rankings • Updated in real-time")
+            embed.set_thumbnail(url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            log.error(f"Error in leaderboard command: {e}")
+            await interaction.followup.send(
+                "An error occurred while fetching the leaderboard.",
+                ephemeral=True,
+            )
+
+    @app_commands.command()
+    @app_commands.checks.cooldown(1, 5)
+    async def claim(self, interaction: discord.Interaction["BallsDexBot"]):
+        """
+        Claim your daily NBA reward.
+        """
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        try:
+            import random
+            from datetime import datetime
+            
+            log.info("Claim command started")
+            
+            # Get or create player
+            player, _ = await Player.get_or_create(discord_id=interaction.user.id)
+            now = datetime.now()
+            
+            log.info(f"Player {interaction.user.id} attempting claim")
+            
+            # Check if already claimed today (24-hour cooldown)
+            last_claim = player.extra_data.get("last_claim_date")
+            if last_claim:
+                last_claim_dt = datetime.fromisoformat(last_claim)
+                time_since_claim = (now - last_claim_dt).total_seconds()
+                if time_since_claim < 86400:  # 24 hours = 86400 seconds
+                    seconds_left = 86400 - time_since_claim
+                    hours_left = int(seconds_left // 3600)
+                    minutes_left = int((seconds_left % 3600) // 60)
+                    log.info(f"Player {interaction.user.id} tried to claim within cooldown")
+                    await interaction.followup.send(
+                        content=f"Come back in **{hours_left}h {minutes_left}m** for your next claim!",
+                        ephemeral=True
+                    )
+                    return
+            
+            log.info("Getting all balls")
+            
+            # Get all enabled balls with their rarities
+            all_balls = await Ball.all().filter(enabled=True)
+            
+            if not all_balls:
+                await interaction.followup.send(
+                    "No NBAs available to claim at the moment.",
+                    ephemeral=True,
+                )
+                return
+            
+            # Get balls with positive rarity for weighted selection
+            spawnable_balls = [b for b in all_balls if b.rarity > 0]
+            
+            if not spawnable_balls:
+                await interaction.followup.send(
+                    "No spawnable NBAs available to claim.",
+                    ephemeral=True,
+                )
+                return
+            
+            # Weighted random selection based on rarity
+            rarities = [b.rarity for b in spawnable_balls]
+            selected_ball = random.choices(spawnable_balls, weights=rarities, k=1)[0]
+            
+            # Generate random stats
+            attack_bonus = random.randint(
+                -settings.max_attack_bonus, settings.max_attack_bonus
+            )
+            health_bonus = random.randint(
+                -settings.max_health_bonus, settings.max_health_bonus
+            )
+            
+            log.info("Creating ball instance")
+            
+            # Create the ball instance
+            ball_instance = await BallInstance.create(
+                ball=selected_ball,
+                player=player,
+                attack_bonus=attack_bonus,
+                health_bonus=health_bonus,
+            )
+            
+            log.info("Updating claim date")
+            
+            # Update last claim date
+            player.extra_data["last_claim_date"] = now.isoformat()
+            await player.save()
+            
+            log.info("Preparing message")
+            
+            # Generate and send the card image with congratulations
+            content, file, view = await ball_instance.prepare_for_message(interaction)
+            
+            log.info("Sending response")
+            
+            congrats_msg = f"🎉 **Congratulations!** You claimed **{selected_ball.country}**!"
+            
+            await interaction.followup.send(
+                content=congrats_msg,
+                file=file,
+                view=view,
+                ephemeral=True,
+            )
+            log.info("Closing file")
+            file.close()
+            log.info("Claim complete")
+            
+        except Exception as e:
+            log.error(f"Error in claim command: {e}")
+            await interaction.followup.send(
+                "An error occurred while claiming your daily reward.",
+                ephemeral=True,
+            )
+
+    @app_commands.command()
+    async def rarity(self, interaction: discord.Interaction["BallsDexBot"]):
+        """
+        Display all NBAs ranked by rarity.
+        """
+        await interaction.response.defer(thinking=True)
+
+        try:
+            # Query database directly for fresh rarity data (not the cached balls dict)
+            # This ensures any admin panel changes are reflected immediately
+            db_balls = await Ball.filter(enabled=True).order_by("rarity", "country")
+            all_balls = db_balls
+
+            if not all_balls:
+                await interaction.followup.send(
+                    "No NBAs available to display.",
+                    ephemeral=True,
+                )
+                return
+
+            # Create entries with correct ranking
+            # Ranking rule: players at position N with a NEW rarity get rank N
+            # Players at positions N+1, N+2, etc with the SAME rarity keep rank N
+            # Next player with a DIFFERENT rarity gets their position as rank
+            entries = []
+            current_rank = 1
+            previous_rarity = None
+            
+            for position, ball in enumerate(all_balls, 1):
+                # When rarity changes, update rank to current position
+                if previous_rarity is not None and ball.rarity != previous_rarity:
+                    current_rank = position
+                
+                emoji = self.bot.get_emoji(ball.emoji_id)
+                emoji_str = str(emoji) if emoji else "❓"
+                entry_text = f"{current_rank}. {ball.country} {emoji_str}"
+                entries.append((entry_text, ""))
+                previous_rarity = ball.rarity
+
+            # Create page source with proper pagination
+            source = RarityPageSource(entries, per_page=10)
+            pages = Pages(source, interaction=interaction, compact=False)
+            await pages.start()
+
+        except Exception as e:
+            log.error(f"Error in rarity command: {e}")
+            await interaction.followup.send(
+                "An error occurred while fetching the rarity list.",
+                ephemeral=True,
+            )
+
+
+class RarityPageSource(FieldPageSource):
+    """Custom page source for rarity list with pagination."""
+
+    async def format_page(self, menu: Pages, entries: list) -> discord.Embed:
+        embed = discord.Embed(
+            title="Rarity List",
+            color=0x3498db
+        )
+        
+        # Add bot avatar as thumbnail
+        embed.set_thumbnail(url=menu.bot.user.avatar.url)
+        
+        # Join all entries with newline (entries are tuples of (name, ""))
+        rarity_text = "\n".join([entry[0] for entry in entries])
+        embed.description = rarity_text
+
+        maximum = self.get_max_pages()
+        if maximum > 1:
+            text = f"Page {menu.current_page + 1}/{maximum}"
+            embed.set_footer(text=text)
+
+        return embed

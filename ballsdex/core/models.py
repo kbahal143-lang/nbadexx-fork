@@ -165,6 +165,9 @@ class Ball(models.Model):
     tradeable = fields.BooleanField(
         default=True, description="Controls whether this ball can be traded or donated."
     )
+    packable = fields.BooleanField(
+        default=True, description="Controls whether this ball can be obtained from packs."
+    )
     emoji_id = fields.BigIntField(
         description="Emoji ID for this ball", validators=[DiscordSnowflakeValidator()]
     )

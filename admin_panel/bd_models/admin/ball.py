@@ -130,6 +130,7 @@ class BallAdmin(admin.ModelAdmin):
                 "fields": [
                     "enabled",
                     "tradeable",
+                    "packable",
                     "short_name",
                     "catch_names",
                     "translations",
@@ -148,9 +149,10 @@ class BallAdmin(admin.ModelAdmin):
         "health",
         "attack",
         "enabled",
+        "packable",
     ]
-    list_editable = ["enabled", "rarity"]
-    list_filter = ["enabled", "tradeable", "regime", "economy", "created_at"]
+    list_editable = ["enabled", "rarity", "packable"]
+    list_filter = ["enabled", "tradeable", "packable", "regime", "economy", "created_at"]
     ordering = ["-created_at"]
 
     search_fields = [

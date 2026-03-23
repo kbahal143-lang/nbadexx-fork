@@ -16,6 +16,7 @@ from .blacklist import BlacklistGuild as BlacklistGuildGroup
 from .history import History as HistoryGroup
 from .info import Info as InfoGroup
 from .logs import Logs as LogsGroup
+from .coins import CoinsAdmin as CoinsGroup, PacksAdmin as PacksGroup
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -42,6 +43,8 @@ class Admin(commands.GroupCog):
         self.__cog_app_commands_group__.add_command(HistoryGroup())
         self.__cog_app_commands_group__.add_command(LogsGroup())
         self.__cog_app_commands_group__.add_command(InfoGroup())
+        self.__cog_app_commands_group__.add_command(CoinsGroup(name="coins"))
+        self.__cog_app_commands_group__.add_command(PacksGroup(name="packs"))
 
     @app_commands.command()
     @app_commands.checks.has_any_role(*settings.root_role_ids)

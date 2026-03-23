@@ -139,7 +139,7 @@ class BallSpawnView(View):
     """
 
     def __init__(self, bot: "BallsDexBot", model: Ball):
-        super().__init__()
+        super().__init__(timeout=600)
         self.bot = bot
         self.model = model
         self.algo: str | None = None

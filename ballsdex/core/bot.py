@@ -232,7 +232,7 @@ class BallsDexBot(commands.AutoShardedBot):
             self.application_emojis[emoji.id] = emoji
 
         balls.clear()
-        for ball in await Ball.all():
+        for ball in await Ball.all().prefetch_related("ballvalue"):
             balls[ball.pk] = ball
         table.add_row(settings.collectible_name.title() + "s", str(len(balls)))
 

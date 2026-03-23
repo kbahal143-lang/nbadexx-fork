@@ -20,6 +20,8 @@ from ballsdex.packages.trade.display import fill_trade_embed_fields
 from ballsdex.packages.trade.trade_user import TradingUser
 from ballsdex.settings import settings
 
+from ballsdex.packages.coins.models import PlayerMoney, PlayerPack
+
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
     from ballsdex.packages.trade.cog import Trade as TradeCog
@@ -342,7 +344,13 @@ class TradeMenu:
         if self.trader1.locked and self.trader2.locked:
             if self.task:
                 self.task.cancel()
-            if not self.trader1.proposal and not self.trader2.proposal:
+            trader1_has_offer = (
+                self.trader1.proposal or self.trader1.coins > 0 or self.trader1.packs
+            )
+            trader2_has_offer = (
+                self.trader2.proposal or self.trader2.coins > 0 or self.trader2.packs
+            )
+            if not trader1_has_offer and not trader2_has_offer:
                 await self.cancel("Nothing has been proposed in the trade, it has been cancelled.")
                 return
             self.current_view.stop()
@@ -372,8 +380,9 @@ class TradeMenu:
 
         for countryball in self.trader1.proposal:
             await countryball.refresh_from_db()
-            if countryball.player.discord_id != self.trader1.player.discord_id:
-                # This is a invalid mutation, the player is not the owner of the countryball
+            if countryball.deleted:
+                raise InvalidTradeOperation()
+            if countryball.player_id != self.trader1.player.pk:
                 raise InvalidTradeOperation()
             countryball.player = self.trader2.player
             countryball.trade_player = self.trader1.player
@@ -385,8 +394,9 @@ class TradeMenu:
 
         for countryball in self.trader2.proposal:
             await countryball.refresh_from_db()
-            if countryball.player.discord_id != self.trader2.player.discord_id:
-                # This is a invalid mutation, the player is not the owner of the countryball
+            if countryball.deleted:
+                raise InvalidTradeOperation()
+            if countryball.player_id != self.trader2.player.pk:
                 raise InvalidTradeOperation()
             countryball.player = self.trader1.player
             countryball.trade_player = self.trader2.player
@@ -399,6 +409,54 @@ class TradeMenu:
         for countryball in valid_transferable_countryballs:
             await countryball.unlock()
             await countryball.save()
+
+        t1coins, _ = await PlayerMoney.get_or_create(player=self.trader1.player)
+        t2coins, _ = await PlayerMoney.get_or_create(player=self.trader2.player)
+
+        if self.trader1.coins > 0:
+            if t1coins.coins < self.trader1.coins:
+                raise InvalidTradeOperation()
+            t1coins.coins -= self.trader1.coins
+            t2coins.coins += self.trader1.coins
+
+        if self.trader2.coins > 0:
+            if t2coins.coins < self.trader2.coins:
+                raise InvalidTradeOperation()
+            t2coins.coins -= self.trader2.coins
+            t1coins.coins += self.trader2.coins
+
+        await t1coins.save(update_fields=["coins"])
+        await t2coins.save(update_fields=["coins"])
+
+        for pack_id, qty in self.trader1.packs.items():
+            sender_pack = await PlayerPack.filter(
+                player=self.trader1.player, pack_id=pack_id
+            ).first()
+            if not sender_pack or sender_pack.quantity < qty:
+                raise InvalidTradeOperation()
+            sender_pack.quantity -= qty
+            await sender_pack.save(update_fields=["quantity"])
+
+            receiver_pack, _ = await PlayerPack.get_or_create(
+                player=self.trader2.player, pack_id=pack_id, defaults={"quantity": 0}
+            )
+            receiver_pack.quantity += qty
+            await receiver_pack.save(update_fields=["quantity"])
+
+        for pack_id, qty in self.trader2.packs.items():
+            sender_pack = await PlayerPack.filter(
+                player=self.trader2.player, pack_id=pack_id
+            ).first()
+            if not sender_pack or sender_pack.quantity < qty:
+                raise InvalidTradeOperation()
+            sender_pack.quantity -= qty
+            await sender_pack.save(update_fields=["quantity"])
+
+            receiver_pack, _ = await PlayerPack.get_or_create(
+                player=self.trader1.player, pack_id=pack_id, defaults={"quantity": 0}
+            )
+            receiver_pack.quantity += qty
+            await receiver_pack.save(update_fields=["quantity"])
 
     async def confirm(self, trader: TradingUser) -> bool:
         """
@@ -539,31 +597,40 @@ class CountryballsSelector(Pages):
                 "to add to your proposal.",
                 ephemeral=True,
             )
+        has_favorite = any(ball.favorite for ball in self.balls_selected)
+        if has_favorite:
+            view = ConfirmChoiceView(interaction)
+            await interaction.followup.send(
+                f"One or more of the {settings.plural_collectible_name} is favorited, "
+                "are you sure you want to add it to the trade?",
+                view=view,
+                ephemeral=True,
+            )
+            await view.wait()
+            if not view.value:
+                return
+
+        failed = []
         for ball in self.balls_selected:
             if ball.is_tradeable is False:
-                return await interaction.followup.send(
-                    f"{settings.collectible_name.title()} #{ball.pk:0X} is not tradeable.",
-                    ephemeral=True,
-                )
+                failed.append(f"#{ball.pk:0X} is not tradeable")
+                continue
+            await ball.refresh_from_db()
+            if ball.deleted:
+                failed.append(f"#{ball.pk:0X} is no longer available")
+                continue
             if await ball.is_locked():
-                return await interaction.followup.send(
-                    f"{settings.collectible_name.title()} #{ball.pk:0X} is locked "
-                    "for trade and won't be added to the proposal.",
-                    ephemeral=True,
-                )
-            view = ConfirmChoiceView(interaction)
-            if ball.favorite:
-                await interaction.followup.send(
-                    f"One or more of the {settings.plural_collectible_name} is favorited, "
-                    "are you sure you want to add it to the trade?",
-                    view=view,
-                    ephemeral=True,
-                )
-                await view.wait()
-                if not view.value:
-                    return
-            trader.proposal.append(ball)
+                failed.append(f"#{ball.pk:0X} is locked by another trade or bet")
+                continue
             await ball.lock_for_trade()
+            trader.proposal.append(ball)
+
+        if failed:
+            fail_text = "\n".join(failed)
+            return await interaction.followup.send(
+                f"Some {settings.plural_collectible_name} could not be added:\n{fail_text}",
+                ephemeral=True,
+            )
         grammar = (
             f"{settings.collectible_name}"
             if len(self.balls_selected) == 1

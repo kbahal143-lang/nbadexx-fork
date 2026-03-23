@@ -73,6 +73,33 @@ def _build_list_of_strings(
     proposal: list[str] = [""]
     i = 0
 
+    if trader.coins > 0:
+        coin_text = f"\N{COIN} **{trader.coins:,}** coins"
+        if trader.locked:
+            text = f"- *{coin_text}*\n"
+        else:
+            text = f"- {coin_text}\n"
+        if trader.cancelled:
+            text = f"~~{text}~~"
+        proposal[i] += text
+
+    for pack_id, qty in trader.packs.items():
+        pack_name = trader.pack_names.get(pack_id, f"Pack #{pack_id}")
+        pack_emoji = trader.pack_emojis.get(pack_id, "")
+        emoji = pack_emoji + " " if pack_emoji else "\N{PACKAGE} "
+        pack_text = f"{emoji}**{qty}x** {pack_name}"
+        if trader.locked:
+            text = f"- *{pack_text}*\n"
+        else:
+            text = f"- {pack_text}\n"
+        if trader.cancelled:
+            text = f"~~{text}~~"
+
+        if len(text) + len(proposal[i]) > 950:
+            i += 1
+            proposal.append("")
+        proposal[i] += text
+
     for countryball in trader.proposal:
         cb_text = countryball.description(short=short, include_emoji=True, bot=bot, is_trade=True)
         if trader.locked:

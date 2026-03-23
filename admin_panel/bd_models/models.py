@@ -216,6 +216,9 @@ class Ball(models.Model):
     tradeable = models.BooleanField(
         help_text="Whether this ball can be traded with others", default=True
     )
+    packable = models.BooleanField(
+        help_text="Whether this ball can be obtained from packs", default=True
+    )
     economy = models.ForeignKey(
         Economy,
         on_delete=models.SET_NULL,
