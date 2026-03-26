@@ -318,9 +318,9 @@ class Packs(commands.GroupCog, group_name="pack"):
             await interaction.response.send_message("Amount must be at least 1!", ephemeral=True)
             return
 
-        if amount > 10:
+        if amount > 3:
             await interaction.response.send_message(
-                "You can only open up to 10 packs at a time!",
+                "You can only open up to 3 packs at a time!",
                 ephemeral=True
             )
             return
