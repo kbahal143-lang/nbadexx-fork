@@ -395,7 +395,7 @@ class Packs(commands.GroupCog, group_name="pack"):
                 if the_pack.special_only and allowed_specials:
                     special_ball_ids = list(
                         await BallInstance.filter(
-                            special__in=allowed_specials,
+                            special_id__in=[s.pk for s in allowed_specials],
                             deleted=False
                         ).distinct().values_list("ball_id", flat=True)
                     )
