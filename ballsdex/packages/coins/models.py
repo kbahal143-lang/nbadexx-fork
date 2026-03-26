@@ -16,8 +16,8 @@ class Pack(models.Model):
     allowed_specials: fields.ManyToManyRelation[Special] = fields.ManyToManyField(
         "models.Special",
         through="coins_pack_allowed_specials",
-        forward_key="special_id",
-        backward_key="pack_id",
+        forward_key="pack_id",
+        backward_key="special_id",
         description="Specials that can appear in this pack (empty = all active specials when special_chance is on)"
     )
     special_chance = fields.BooleanField(
