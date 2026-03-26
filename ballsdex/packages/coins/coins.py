@@ -14,7 +14,7 @@ from ballsdex.core.models import (
 from ballsdex.core.utils import menus
 from ballsdex.core.utils.paginator import Pages
 from ballsdex.core.utils.sorting import FilteringChoices, SortingChoices, filter_balls, sort_balls
-from ballsdex.core.utils.transformers import BallInstanceTransform, BallEnabledTransform, SpecialEnabledTransform
+from ballsdex.core.utils.transformers import BallInstanceTransform, BallEnabledTransform, SeasonTransform, SpecialEnabledTransform, get_season_ball_ids
 from ballsdex.settings import settings
 
 from .views import ConfirmView
@@ -290,6 +290,7 @@ class Coins(commands.GroupCog, group_name="coins"):
         self,
         interaction: discord.Interaction,
         countryball: BallInstanceTransform,
+        season: SeasonTransform | None = None,
     ):
         """
         Sell an NBA for coins (quicksell).
@@ -298,6 +299,8 @@ class Coins(commands.GroupCog, group_name="coins"):
         ----------
         countryball: BallInstance
             The NBA you want to sell
+        season: Season
+            Filter the autocomplete results to a specific season. Ignored afterwards.
         """
         if countryball.favorite:
             await interaction.response.send_message(
@@ -413,6 +416,7 @@ class Coins(commands.GroupCog, group_name="coins"):
         sort: SortingChoices | None = None,
         special: SpecialEnabledTransform | None = None,
         filter: FilteringChoices | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         Bulk sell nbas for coins, with paramaters to aid with searching.
@@ -427,6 +431,8 @@ class Coins(commands.GroupCog, group_name="coins"):
             Filter the results to a special event
         filter: FilteringChoices
             Filter the results to a specific filter
+        season: Season
+            Filter the results to a specific season
         """
         if interaction.user.id in _active_operations:
             await interaction.response.send_message("You have another operation in progress!", ephemeral=True)
@@ -445,6 +451,9 @@ class Coins(commands.GroupCog, group_name="coins"):
             query = query.filter(ball=countryball)
         if special:
             query = query.filter(special=special)
+        if season:
+            season_ball_ids = await get_season_ball_ids(season.pk)
+            query = query.filter(ball__id__in=season_ball_ids)
         if sort:
             query = sort_balls(sort, query)
         if filter:

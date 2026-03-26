@@ -29,6 +29,7 @@ from rich.table import Table
 
 from ballsdex.core.commands import Core
 from ballsdex.core.dev import Dev
+from ballsdex.core.image_generator.image_gen import refresh_card_style
 from ballsdex.core.metrics import PrometheusServer
 from ballsdex.core.models import (
     Ball,
@@ -260,6 +261,8 @@ class BallsDexBot(commands.AutoShardedBot):
         for blacklisted_id in await BlacklistedGuild.all().only("discord_id"):
             self.blacklist_guild.add(blacklisted_id.discord_id)
         table.add_row("Blacklisted guilds", str(len(self.blacklist_guild)))
+
+        await refresh_card_style()
 
         log.info("Cache loaded, summary displayed below:")
         console = Console()

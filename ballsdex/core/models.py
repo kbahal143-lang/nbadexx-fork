@@ -600,6 +600,23 @@ class Friendship(models.Model):
         return str(self.pk)
 
 
+class Season(models.Model):
+    name = fields.CharField(max_length=64, unique=True)
+    balls: fields.ManyToManyRelation[Ball] = fields.ManyToManyField(
+        "models.Ball",
+        related_name="seasons",
+        through="season_season_balls",
+        forward_key="season_id",
+        backward_key="ball_id",
+    )
+
+    class Meta:
+        table = "season_season"
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Block(models.Model):
     id: int
     player1: fields.ForeignKeyRelation[Player] = fields.ForeignKeyField(

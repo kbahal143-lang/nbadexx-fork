@@ -19,8 +19,10 @@ from ballsdex.core.utils.sorting import FilteringChoices, SortingChoices, filter
 from ballsdex.core.utils.transformers import (
     BallEnabledTransform,
     BallInstanceTransform,
+    SeasonTransform,
     SpecialEnabledTransform,
     TradeCommandType,
+    get_season_ball_ids,
 )
 from ballsdex.packages.trade.display import TradeViewFormat
 from ballsdex.packages.trade.menu import BulkAddView, TradeMenu, TradeViewMenu
@@ -233,6 +235,7 @@ class Trade(commands.GroupCog):
         interaction: discord.Interaction["BallsDexBot"],
         countryball: BallInstanceTransform,
         special: SpecialEnabledTransform | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         Add a countryball to the ongoing trade.
@@ -243,6 +246,8 @@ class Trade(commands.GroupCog):
             The countryball you want to add to your proposal
         special: Special
             Filter the results of autocompletion to a special event. Ignored afterwards.
+        season: Season
+            Filter the autocomplete results to a specific season. Ignored afterwards.
         """
         if not countryball:
             return
@@ -307,6 +312,7 @@ class Trade(commands.GroupCog):
         sort: SortingChoices | None = None,
         special: SpecialEnabledTransform | None = None,
         filter: FilteringChoices | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         Bulk add countryballs to the ongoing trade, with paramaters to aid with searching.
@@ -321,6 +327,8 @@ class Trade(commands.GroupCog):
             Filter the results to a special event
         filter: FilteringChoices
             Filter the results to a specific filter
+        season: Season
+            Filter the results to a specific season
         """
         await interaction.response.defer(ephemeral=True, thinking=True)
         trade, trader = self.get_trade(interaction)
@@ -334,15 +342,16 @@ class Trade(commands.GroupCog):
                 ephemeral=True,
             )
             return
-        query = BallInstance.filter(
-            player__discord_id=interaction.user.id,
-            locked__isnull=True,
-            deleted=False,
-        ).exclude(tradeable=False, ball__tradeable=False)
+        query = BallInstance.filter(player__discord_id=interaction.user.id).exclude(
+            tradeable=False, ball__tradeable=False
+        )
         if countryball:
             query = query.filter(ball=countryball)
         if special:
             query = query.filter(special=special)
+        if season:
+            season_ball_ids = await get_season_ball_ids(season.pk)
+            query = query.filter(ball__id__in=season_ball_ids)
         if sort:
             query = sort_balls(sort, query)
         if filter:

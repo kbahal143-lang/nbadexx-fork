@@ -13,7 +13,9 @@ from ballsdex.core.utils.sorting import FilteringChoices, SortingChoices, filter
 from ballsdex.core.utils.transformers import (
     BallEnabledTransform,
     BallInstanceTransform,
+    SeasonTransform,
     SpecialEnabledTransform,
+    get_season_ball_ids,
 )
 from .betting_user import BettingUser
 from .menu import BetMenu
@@ -139,6 +141,7 @@ class Bet(commands.GroupCog):
         interaction: discord.Interaction["BallsDexBot"],
         nba: BallInstanceTransform,
         special: SpecialEnabledTransform | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         Add an NBA to the ongoing bet.
@@ -149,6 +152,8 @@ class Bet(commands.GroupCog):
             The NBA you want to add to your proposal
         special: Special
             Filter the results of autocompletion to a special event. Ignored afterwards.
+        season: Season
+            Filter the autocomplete results to a specific season. Ignored afterwards.
         """
         if not nba:
             return
@@ -292,6 +297,7 @@ class Bet(commands.GroupCog):
         sort: SortingChoices | None = None,
         special: SpecialEnabledTransform | None = None,
         filter: FilteringChoices | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         Bulk add NBAs to your bet with filtering options.
@@ -306,6 +312,8 @@ class Bet(commands.GroupCog):
             Filter the results to a special event
         filter: FilteringChoices
             Filter the results to a specific filter
+        season: Season
+            Filter the results to a specific season
         """
         await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -335,6 +343,9 @@ class Bet(commands.GroupCog):
                 query = query.filter(ball=nba)
             if special:
                 query = query.filter(special=special)
+            if season:
+                season_ball_ids = await get_season_ball_ids(season.pk)
+                query = query.filter(ball__id__in=season_ball_ids)
             if sort:
                 query = sort_balls(sort, query)
             if filter:

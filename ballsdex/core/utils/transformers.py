@@ -17,6 +17,7 @@ from ballsdex.core.models import (
     BallInstance,
     Economy,
     Regime,
+    Season,
     Special,
     balls,
     economies,
@@ -27,6 +28,30 @@ from ballsdex.settings import settings
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
 
+
+async def get_season_ball_ids(season_pk: int) -> list[int]:
+    """
+    Return the PKs of all Ball rows belonging to a season.
+
+    Uses raw SQL because Tortoise ORM's M2M .all() only returns one row when
+    the Django-generated through table has an auto-increment `id` primary key.
+    """
+    from tortoise import connections
+    conn = connections.get("default")
+    _, rows = await conn.execute_query(
+        "SELECT ball_id FROM season_season_balls WHERE season_id = $1",
+        [season_pk],
+    )
+    return [row["ball_id"] for row in rows]
+
+
+async def get_season_balls(season_pk: int) -> list[Ball]:
+    """Return Ball objects belonging to a season via raw SQL."""
+    ball_ids = await get_season_ball_ids(season_pk)
+    if not ball_ids:
+        return []
+    return await Ball.filter(pk__in=ball_ids)
+
 log = logging.getLogger("ballsdex.core.utils.transformers")
 T = TypeVar("T", bound=Model)
 
@@ -36,6 +61,7 @@ __all__ = (
     "SpecialTransform",
     "RegimeTransform",
     "EconomyTransform",
+    "SeasonTransform",
 )
 
 
@@ -170,6 +196,12 @@ class BallInstanceTransformer(ModelTransformer[BallInstance]):
         if (special := getattr(interaction.namespace, "special", None)) and special.isdigit():
             balls_queryset = balls_queryset.filter(special_id=int(special))
 
+        if (season_val := getattr(interaction.namespace, "season", None)) and season_val.isdigit():
+            season = await Season.get_or_none(pk=int(season_val))
+            if season:
+                ball_ids = await get_season_ball_ids(season.pk)
+                balls_queryset = balls_queryset.filter(ball__id__in=ball_ids)
+
         if interaction.command and (trade_type := interaction.command.extras.get("trade", None)):
             if trade_type == TradeCommandType.PICK:
                 balls_queryset = balls_queryset.filter(
@@ -267,6 +299,40 @@ class BallTransformer(TTLModelTransformer[Ball]):
     async def load_items(self) -> Iterable[Ball]:
         return balls.values()
 
+    async def get_season_balls(self, season: Season) -> list[Ball]:
+        """Return balls to show when a season is selected. Override to filter further."""
+        return await get_season_balls(season.pk)
+
+    async def get_options(
+        self, interaction: Interaction["BallsDexBot"], value: str
+    ) -> list[app_commands.Choice[str]]:
+        season_val = getattr(interaction.namespace, "season", None)
+        if season_val and season_val.isdigit():
+            season = await Season.get_or_none(pk=int(season_val))
+            if season:
+                season_balls = await self.get_season_balls(season)
+                choices: list[app_commands.Choice] = []
+                for ball in season_balls:
+                    if value.lower() in ball.country.lower():
+                        choices.append(
+                            app_commands.Choice(name=ball.country, value=str(ball.pk))
+                        )
+                    if len(choices) >= 25:
+                        break
+                return choices
+
+        # No season selected — use TTL cache as normal
+        await self.maybe_refresh()
+        i = 0
+        choices = []
+        for item in self.items.values():
+            if value.lower() in self.search_map[item]:
+                choices.append(app_commands.Choice(name=self.key(item), value=str(item.pk)))
+                i += 1
+                if i == 25:
+                    break
+        return choices
+
 
 class BallEnabledTransformer(BallTransformer):
     async def load_items(self) -> Iterable[Ball]:
@@ -275,9 +341,15 @@ class BallEnabledTransformer(BallTransformer):
     async def transform(
         self, interaction: discord.Interaction["BallsDexBot"], value: str
     ) -> Optional[Ball]:
+        season_selected = (
+            (season_val := getattr(interaction.namespace, "season", None))
+            and season_val.isdigit()
+        )
         try:
             ball = await super().transform(interaction, value)
-            if ball is None or not ball.enabled:
+            if ball is None:
+                return None
+            if not ball.enabled and not season_selected:
                 raise ValueError(
                     f"This {settings.collectible_name} is disabled and will not be shown."
                 )
@@ -322,6 +394,18 @@ class EconomyTransformer(TTLModelTransformer[Economy]):
         return economies.values()
 
 
+class SeasonTransformer(TTLModelTransformer[Season]):
+    name = "season"
+    model = Season()
+    ttl = 60
+
+    def key(self, model: Season) -> str:
+        return model.name
+
+    async def load_items(self) -> Iterable[Season]:
+        return await Season.all()
+
+
 BallTransform = app_commands.Transform[Ball, BallTransformer]
 BallInstanceTransform = app_commands.Transform[BallInstance, BallInstanceTransformer]
 SpecialTransform = app_commands.Transform[Special, SpecialTransformer]
@@ -329,3 +413,4 @@ RegimeTransform = app_commands.Transform[Regime, RegimeTransformer]
 EconomyTransform = app_commands.Transform[Economy, EconomyTransformer]
 SpecialEnabledTransform = app_commands.Transform[Special, SpecialEnabledTransformer]
 BallEnabledTransform = app_commands.Transform[Ball, BallEnabledTransformer]
+SeasonTransform = app_commands.Transform[Season, SeasonTransformer]

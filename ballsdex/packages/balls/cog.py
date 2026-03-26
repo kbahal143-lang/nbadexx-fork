@@ -1,5 +1,6 @@
 import enum
 import logging
+from collections import defaultdict
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -20,14 +21,19 @@ from ballsdex.core.models import (
     Ball,
     balls,
 )
+from ballsdex.packages.coins.models import BallValue
 from ballsdex.core.utils.buttons import ConfirmChoiceView
 from ballsdex.core.utils.paginator import FieldPageSource, Pages
 from ballsdex.core.utils.sorting import FilteringChoices, SortingChoices, filter_balls, sort_balls
 from ballsdex.core.utils.transformers import (
     BallEnabledTransform,
     BallInstanceTransform,
+    BallTransform,
+    SeasonTransform,
     SpecialEnabledTransform,
     TradeCommandType,
+    get_season_ball_ids,
+    get_season_balls as get_season_balls_list,
 )
 from ballsdex.core.utils.utils import can_mention, inventory_privacy, is_staff
 from ballsdex.packages.balls.countryballs_paginator import CountryballsViewer, DuplicateViewMenu
@@ -134,6 +140,7 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
         countryball: BallEnabledTransform | None = None,
         special: SpecialEnabledTransform | None = None,
         filter: FilteringChoices | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         List your countryballs.
@@ -152,6 +159,8 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             Filter the list by a specific special event.
         filter: FilteringChoices
             Filter the list by a specific filter.
+        season: Season
+            Filter the list to a specific season.
         """
         user_obj = user or interaction.user
         await interaction.response.defer(thinking=True)
@@ -193,6 +202,9 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             query = query.filter(ball=countryball)
         if special:
             query = query.filter(special=special)
+        if season:
+            season_ball_ids = await get_season_ball_ids(season.pk)
+            query = query.filter(ball__id__in=season_ball_ids)
         if sort:
             query = sort_balls(sort, query)
         else:
@@ -238,6 +250,7 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
     async def completion(
         self,
         interaction: discord.Interaction["BallsDexBot"],
+        season: SeasonTransform | None = None,
         user: discord.User | None = None,
         special: SpecialEnabledTransform | None = None,
         filter: FilteringChoices | None = None,
@@ -247,6 +260,8 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
 
         Parameters
         ----------
+        season: Season
+            Filter completion to a specific season.
         user: discord.User
             The user whose completion you want to view, if not yours.
         special: Special
@@ -284,19 +299,26 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
 
             if await inventory_privacy(self.bot, interaction, player, user_obj) is False:
                 return
-        # Filter disabled balls, they do not count towards progression
-        # Only ID and emoji is interesting for us
-        bot_countryballs = {x: y.emoji_id for x, y in balls.items() if y.enabled}
 
-        # Set of ball IDs owned by the player
-        filters = {"player__discord_id": user_obj.id, "ball__enabled": True}
+        if season:
+            # Season mode: show all balls in the season (including disabled)
+            season_balls = await get_season_balls_list(season.pk)
+            bot_countryballs = {b.pk: b.emoji_id for b in season_balls}
+            filters: dict = {"player__discord_id": user_obj.id, "ball_id__in": list(bot_countryballs.keys())}
+        else:
+            # Filter disabled balls, they do not count towards progression
+            # Only ID and emoji is interesting for us
+            bot_countryballs = {x: y.emoji_id for x, y in balls.items() if y.enabled}
+            filters = {"player__discord_id": user_obj.id, "ball__enabled": True}
+
         if special:
             filters["special"] = special
-            bot_countryballs = {
-                x: y.emoji_id
-                for x, y in balls.items()
-                if y.enabled and (special.end_date is None or y.created_at < special.end_date)
-            }
+            if not season:
+                bot_countryballs = {
+                    x: y.emoji_id
+                    for x, y in balls.items()
+                    if y.enabled and (special.end_date is None or y.created_at < special.end_date)
+                }
         if filter:
             query = filter_balls(filter, BallInstance.filter(**filters))
         else:
@@ -347,7 +369,7 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             # Getting the list of emoji IDs from the IDs of the owned countryballs
             fill_fields(
                 f"Owned {settings.plural_collectible_name}",
-                set(bot_countryballs[x] for x in owned_countryballs),
+                set(bot_countryballs[x] for x in owned_countryballs if x in bot_countryballs),
             )
         else:
             entries.append((f"__**Owned {settings.plural_collectible_name}**__", "Nothing yet."))
@@ -365,9 +387,10 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
 
         source = FieldPageSource(entries, per_page=5, inline=False, clear_description=False)
         special_str = f" ({special.name})" if special else ""
+        season_str = f" — {season.name}" if season else ""
         original_catcher_string = " " + filter.value.replace("_", " ") + " " if filter else ""
         source.embed.description = (
-            f"{settings.bot_name}{original_catcher_string}{special_str} progression: "
+            f"{settings.bot_name}{original_catcher_string}{special_str}{season_str} progression: "
             f"**{round(len(owned_countryballs) / len(bot_countryballs) * 100, 1)}%**"
         )
         source.embed.colour = discord.Colour.blurple()
@@ -556,6 +579,7 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
         user: discord.User,
         countryball: BallInstanceTransform,
         special: SpecialEnabledTransform | None = None,
+        season: SeasonTransform | None = None,
     ):
         """
         Give a countryball to a user.
@@ -568,6 +592,8 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             The countryball you're giving away
         special: Special
             Filter the results of autocompletion to a special event. Ignored afterwards.
+        season: Season
+            Filter the autocomplete results to a specific season. Ignored afterwards.
         """
         if not countryball:
             return
@@ -922,6 +948,7 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
         interaction: discord.Interaction["BallsDexBot"],
         countryball: BallEnabledTransform | None = None,
         ephemeral: bool = False,
+        season: SeasonTransform | None = None,
     ):
         """
         Show the collection of a specific countryball.
@@ -932,6 +959,8 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             The countryball you want to see the collection of
         ephemeral: bool
             Whether or not to send the command ephemerally.
+        season: Season
+            Filter the collection to a specific season.
         """
         await interaction.response.defer(thinking=True, ephemeral=ephemeral)
         player, _ = await Player.get_or_create(discord_id=interaction.user.id)
@@ -958,6 +987,10 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
         if countryball:
             query = query.filter(ball=countryball)
             specials = specials.filter(ball=countryball)
+        if season:
+            season_ball_ids = await get_season_ball_ids(season.pk)
+            query = query.filter(ball__id__in=season_ball_ids)
+            specials = specials.filter(ball__id__in=season_ball_ids)
         counts_list = await query.values("player_id", "total", "traded", "specials")
         specials = await specials.values("special__name", "count")
 
@@ -988,8 +1021,11 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             emoji = special_emojis.get(special["special__name"], "")
             desc += f"{emoji} {special['special__name']}: {special["count"]:,}\n"
 
+        season_suffix = f" — {season.name}" if season else ""
         embed = discord.Embed(
-            title=f"Collection of {countryball.country}" if countryball else "Total Collection",
+            title=(
+                f"Collection of {countryball.country}" if countryball else "Total Collection"
+            ) + season_suffix,
             description=desc,
             color=discord.Color.blurple(),
         )
@@ -1287,51 +1323,102 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             )
 
     @app_commands.command()
-    async def rarity(self, interaction: discord.Interaction["BallsDexBot"]):
+    async def rarity(
+        self,
+        interaction: discord.Interaction["BallsDexBot"],
+        nba: BallTransform | None = None,
+        season: SeasonTransform | None = None,
+    ):
         """
-        Display all NBAs ranked by rarity.
+        Display all NBAs ranked by rarity, or check the rarity of a specific NBA.
+
+        Parameters
+        ----------
+        nba: Ball
+            Check the rank and rarity of a specific NBA. Shows the full list if not set.
+        season: Season
+            Show only the NBAs in this season. Shows all enabled NBAs if not set.
         """
         await interaction.response.defer(thinking=True)
 
         try:
-            # Query database directly for fresh rarity data (not the cached balls dict)
-            # This ensures any admin panel changes are reflected immediately
-            db_balls = await Ball.filter(enabled=True).order_by("rarity", "country")
-            all_balls = db_balls
+            if season:
+                season_ball_ids = await get_season_ball_ids(season.pk)
+                db_balls = await Ball.filter(pk__in=season_ball_ids).order_by("rarity", "country")
+            else:
+                db_balls = await Ball.filter(enabled=True).order_by("rarity", "country")
 
-            if not all_balls:
+            if not db_balls:
                 await interaction.followup.send(
                     "No NBAs available to display.",
                     ephemeral=True,
                 )
                 return
 
-            # Create entries with correct ranking
-            # Ranking rule: players at position N with a NEW rarity get rank N
-            # Players at positions N+1, N+2, etc with the SAME rarity keep rank N
-            # Next player with a DIFFERENT rarity gets their position as rank
-            entries = []
-            current_rank = 1
-            previous_rarity = None
-            
-            for position, ball in enumerate(all_balls, 1):
-                # When rarity changes, update rank to current position
-                if previous_rarity is not None and ball.rarity != previous_rarity:
-                    current_rank = position
-                
-                emoji = self.bot.get_emoji(ball.emoji_id)
-                emoji_str = str(emoji) if emoji else "❓"
-                entry_text = f"{current_rank}. {ball.country} {emoji_str}"
-                entries.append((entry_text, ""))
-                previous_rarity = ball.rarity
+            def fmt_qs(value: int) -> str:
+                if value >= 1_000_000:
+                    n = value / 1_000_000
+                    return f"{n:.2f}".rstrip("0").rstrip(".") + "m"
+                elif value >= 1_000:
+                    n = value / 1_000
+                    return f"{n:.2f}".rstrip("0").rstrip(".") + "k"
+                return str(value)
 
-            # Create page source with proper pagination
+            # Build quicksell lookup: ball_id → quicksell_value (default 100)
+            ball_values = await BallValue.all().values("ball_id", "quicksell_value")
+            qs_map: dict[int, int] = {bv["ball_id"]: bv["quicksell_value"] for bv in ball_values}
+
+            # Group balls by rarity value — round to 6dp to avoid float precision issues
+            indexes: dict[float, list] = defaultdict(list)
+            for ball in db_balls:
+                key = round(float(ball.rarity), 6)
+                indexes[key].append(ball)
+
+            # Build ranked entries list
+            entries = []
+            i = 1
+            rank_map: dict[int, tuple[int, float]] = {}  # ball.pk → (rank, rarity_value)
+            for rarity_value in sorted(indexes.keys()):
+                chunk = indexes[rarity_value]
+                for ball in chunk:
+                    rank_map[ball.pk] = (i, rarity_value)
+                    emoji = self.bot.get_emoji(ball.emoji_id)
+                    emoji_str = str(emoji) if emoji else "❓"
+                    qs = qs_map.get(ball.pk, 100)
+                    entry_text = f"{i}) {ball.country} {emoji_str} | Quicksell: {fmt_qs(qs)}"
+                    entries.append((entry_text, ""))
+                i += len(chunk)
+
+            # Individual NBA lookup
+            if nba:
+                if nba.pk not in rank_map:
+                    await interaction.followup.send(
+                        f"**{nba.country}** is not in the current list"
+                        + (f" for season **{season.name}**" if season else "") + ".",
+                        ephemeral=True,
+                    )
+                    return
+                rank, rarity_val = rank_map[nba.pk]
+                qs = qs_map.get(nba.pk, 100)
+                emoji = self.bot.get_emoji(nba.emoji_id)
+                emoji_str = str(emoji) if emoji else "❓"
+                embed = discord.Embed(title="NBA Rarity")
+                embed.description = (
+                    f"**{nba.country}** {emoji_str}\n\n"
+                    f"Rank: **#{rank}** out of **{len(entries)}**\n"
+                    f"Quicksell: **{fmt_qs(qs)}**"
+                )
+                if season:
+                    embed.set_footer(text=f"Season: {season.name}")
+                await interaction.followup.send(embed=embed)
+                return
+
             source = RarityPageSource(entries, per_page=10)
             pages = Pages(source, interaction=interaction, compact=False)
             await pages.start()
 
         except Exception as e:
-            log.error(f"Error in rarity command: {e}")
+            log.error(f"Error in rarity command: {e}", exc_info=True)
             await interaction.followup.send(
                 "An error occurred while fetching the rarity list.",
                 ephemeral=True,
@@ -1347,8 +1434,8 @@ class RarityPageSource(FieldPageSource):
             color=0x3498db
         )
         
-        # Add bot avatar as thumbnail
-        embed.set_thumbnail(url=menu.bot.user.avatar.url)
+        if menu.bot.user.avatar:
+            embed.set_thumbnail(url=menu.bot.user.avatar.url)
         
         # Join all entries with newline (entries are tuples of (name, ""))
         rarity_text = "\n".join([entry[0] for entry in entries])
