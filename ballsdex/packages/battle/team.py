@@ -30,8 +30,8 @@ log = logging.getLogger("ballsdex.packages.battle")
 # ──────────────────────────────────────────────────────────
 BATTLE_GUILD_ID = 1440962506796433519
 
-# Only letters, spaces, apostrophes, hyphens, and dots — no numbers, no parentheses
-_BASE_CARD_RE = re.compile(r"^[A-Za-z'\-\.\s]+$")
+# Exclude digits, parentheses and brackets — allows accented/unicode names like Jokić, Şengün
+_BASE_CARD_RE = re.compile(r"^[^\d\(\)\[\]]+$")
 
 POSITION_CHOICES = [
     app_commands.Choice(name="Point Guard (PG)", value="PG"),

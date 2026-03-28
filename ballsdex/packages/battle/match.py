@@ -493,6 +493,20 @@ class MatchCog(commands.GroupCog, group_name="match"):
             )
             return
 
+        # Block both users from being in two matches at once — prevents double-spend exploits
+        if self._get_session(interaction.user.id):
+            await interaction.followup.send(
+                "❌ You're already in an active match. Finish or cancel it before starting a new one.",
+                ephemeral=True,
+            )
+            return
+        if self._get_session(member.id):
+            await interaction.followup.send(
+                f"❌ **{member.display_name}** is already in an active match and can't be challenged right now.",
+                ephemeral=True,
+            )
+            return
+
         # Check challenger has a complete team
         ch_player = await Player.get_or_none(discord_id=interaction.user.id)
         if not ch_player:
@@ -998,6 +1012,8 @@ class MatchCog(commands.GroupCog, group_name="match"):
             live_msg = await channel.send(embed=live_embed)
         except Exception as e:
             log.exception("Failed to send live match message")
+            # cancel_match guards against "simulating" status — reset it first so stakes are returned
+            session.status = "staking"
             await self.cancel_match(session, cancelled_by=None, reason="error")
             return
 
@@ -1034,8 +1050,9 @@ class MatchCog(commands.GroupCog, group_name="match"):
                         await pp.save()
             return
 
-        # Determine winner and loser user IDs
-        winner_id = session.challenger_id if winner_sim.owner == ch_name else session.challenged_id
+        # Determine winner and loser user IDs by object identity (not name string — avoids
+        # false result if both players happen to share the same display name)
+        winner_id = session.challenger_id if winner_sim is team_a_sim else session.challenged_id
         loser_id = session.challenged_id if winner_id == session.challenger_id else session.challenger_id
 
         winner_player = await Player.get_or_none(discord_id=winner_id)
