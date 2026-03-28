@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("ballsdex.packages.battle")
 
+# ──────────────────────────────────────────────────────────
+# FILL IN: the Discord server (guild) ID where battle
+# commands should be allowed. Teams are blocked everywhere else.
+# ──────────────────────────────────────────────────────────
+BATTLE_GUILD_ID = 1440962506796433519
+
 # Only letters, spaces, apostrophes, hyphens, and dots — no numbers, no parentheses
 _BASE_CARD_RE = re.compile(r"^[A-Za-z'\-\.\s]+$")
 
@@ -81,6 +87,14 @@ class TeamCog(commands.GroupCog, group_name="team"):
 
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild_id != BATTLE_GUILD_ID:
+            await interaction.response.send_message(
+                "Battle commands are not available in this server.", ephemeral=True
+            )
+            return False
+        return True
 
     # ─────────────────────────────────────────────────────────────────
     # /team add

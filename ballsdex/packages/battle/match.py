@@ -37,6 +37,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("ballsdex.packages.battle")
 
+# ──────────────────────────────────────────────────────────
+# FILL IN: the Discord server (guild) ID where battle
+# commands should be allowed. Matches are blocked everywhere else.
+# ──────────────────────────────────────────────────────────
+BATTLE_GUILD_ID = 1440962506796433519
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session data structures
@@ -442,6 +448,14 @@ class MatchCog(commands.GroupCog, group_name="match"):
         self.active_matches: TTLCache[tuple, MatchSession] = TTLCache(
             maxsize=1000, ttl=3600
         )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild_id != BATTLE_GUILD_ID:
+            await interaction.response.send_message(
+                "Battle commands are not available in this server.", ephemeral=True
+            )
+            return False
+        return True
 
     def _get_session(self, user_id: int) -> MatchSession | None:
         for key, session in self.active_matches.items():
