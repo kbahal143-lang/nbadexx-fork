@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 from discord.ext import commands
-from tortoise import timezone
+from tortoise import connections, timezone
 from tortoise.transactions import in_transaction
 
 from ballsdex.core.models import (
@@ -376,7 +376,17 @@ class Packs(commands.GroupCog, group_name="pack"):
                 await pack.save(update_fields=["quantity"])
 
                 # --- Multi-special system ---
-                allowed_specials: list[Special] = list(await the_pack.allowed_specials.all())
+                # Use raw SQL to avoid Tortoise ORM M2M bug with Django auto-increment through tables
+                _conn = connections.get("default")
+                _rows = await _conn.execute_query_dict(
+                    "SELECT special_id FROM coins_pack_allowed_specials WHERE pack_id = $1",
+                    [the_pack.pk],
+                )
+                _special_ids = [r["special_id"] for r in _rows]
+                allowed_specials: list[Special] = (
+                    list(await Special.filter(pk__in=_special_ids).all())
+                    if _special_ids else []
+                )
 
                 # Build special pool:
                 # special_chance=True + empty allowed → all active (non-hidden) specials

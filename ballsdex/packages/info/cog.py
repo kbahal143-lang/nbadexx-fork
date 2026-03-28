@@ -170,10 +170,11 @@ class Info(commands.Cog):
                 content += f"{mention_app_command(app_command)}: {translated}\n"
             if not content:
                 continue
+            display_name = cog.qualified_name.removesuffix("Cog")
             pages = pagify(content, page_length=1024)
             for i, page in enumerate(pages):
                 embed.add_field(
-                    name=cog.qualified_name if i == 0 else "\u200b", value=page, inline=False
+                    name=display_name if i == 0 else "\u200b", value=page, inline=False
                 )
 
         await interaction.response.send_message(embed=embed)
