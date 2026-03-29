@@ -72,7 +72,7 @@ class TeamSim:
 
     def pick_ball_handler(self) -> PlayerSim:
         """Pick who initiates this possession (weighted by role)."""
-        weights = {"PG": 35, "SG": 25, "SF": 20, "PF": 12, "C": 8}
+        weights = {"PG": 28, "SG": 22, "SF": 18, "PF": 17, "C": 15}
         pool: list[PlayerSim] = []
         for p in self.players():
             pool.extend([p] * weights.get(p.position, 10))
@@ -97,7 +97,7 @@ class TeamSim:
         others = [p for p in self.players() if p is not scorer]
         if not others:
             return None
-        weights = {"PG": 40, "SG": 20, "SF": 15, "PF": 12, "C": 8}
+        weights = {"PG": 35, "SG": 20, "SF": 15, "PF": 15, "C": 15}
         pool: list[PlayerSim] = []
         for p in others:
             pool.extend([p] * weights.get(p.position, 10))

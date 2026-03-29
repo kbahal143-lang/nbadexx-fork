@@ -628,7 +628,7 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
         # ── Card stake
         if card is not None:
-            inst = card
+            inst = await BallInstance.get(pk=card.pk).prefetch_related("ball")
             if inst.player_id != player.pk:
                 await interaction.followup.send("❌ You don't own that card.", ephemeral=True)
                 return
@@ -807,6 +807,7 @@ class MatchCog(commands.GroupCog, group_name="match"):
             return
 
         stake = session.stakes[interaction.user.id]
+        card = await BallInstance.get(pk=card.pk).prefetch_related("ball")
         if card.pk not in stake.ball_ids:
             await interaction.followup.send(
                 f"❌ **{card.ball.country}** is not in your stakes.", ephemeral=True
@@ -1061,12 +1062,22 @@ class MatchCog(commands.GroupCog, group_name="match"):
         loser_stake = session.stakes.get(loser_id, UserStake())
 
         # ── Transfer stakes to winner ─────────────────────────────────
-        # Cards
-        all_ball_ids = list(winner_stake.ball_ids) + list(loser_stake.ball_ids)
+        # Separate: loser's cards are the ones the winner actually "won"
+        winner_ball_ids = list(winner_stake.ball_ids)
+        loser_ball_ids  = list(loser_stake.ball_ids)
+        all_ball_ids    = winner_ball_ids + loser_ball_ids
+
         if all_ball_ids and winner_player:
             await BallInstance.filter(pk__in=all_ball_ids).update(
                 player=winner_player, tradeable=True
             )
+            # Mark loser's cards as traded — sets trade history on each card
+            if loser_ball_ids and loser_player:
+                await BallInstance.filter(pk__in=loser_ball_ids).update(
+                    trade_player=loser_player
+                )
+        elif all_ball_ids:
+            await BallInstance.filter(pk__in=all_ball_ids).update(tradeable=True)
 
         # Coins (already deducted from both players at stake time — give pooled total to winner)
         total_coins = winner_stake.coins + loser_stake.coins
@@ -1090,14 +1101,60 @@ class MatchCog(commands.GroupCog, group_name="match"):
         session.status = "done"
         self.active_matches.pop(session.session_key, None)
 
-        # Announce winner in channel
+        # ── Build win announcement embed ──────────────────────────────
         winner_mention = (
             ch_member.mention if winner_id == session.challenger_id and ch_member
             else cd_member.mention if cd_member else f"<@{winner_id}>"
         )
-        try:
-            await channel.send(
-                f"🏆 {winner_mention} wins the match! Congrats!"
+
+        # Fetch names + IDs of the loser's cards (what the winner received)
+        won_lines: list[str] = []
+        for bid in loser_ball_ids:
+            try:
+                inst = await BallInstance.get(pk=bid).prefetch_related("ball")
+                won_lines.append(f"**{inst.ball.country}** `#{inst.pk:0X}`")
+            except Exception:
+                won_lines.append(f"`#{bid:0X}`")
+
+        win_embed = discord.Embed(
+            title="🏆  Match Result",
+            description=f"{winner_mention} wins the match! Congrats!",
+            color=0xFFD700,
+        )
+        if won_lines:
+            win_embed.add_field(
+                name="📦  Cards received",
+                value="\n".join(won_lines),
+                inline=False,
             )
+        if total_coins > 0:
+            win_embed.add_field(
+                name="🪙  Coins received",
+                value=f"{total_coins:,} coins",
+                inline=False,
+            )
+
+        # Packs received — combine all stakes (winner's returned + loser's won)
+        all_packs: dict[int, int] = {}
+        for stake_obj in session.stakes.values():
+            for pack_id, qty in stake_obj.packs.items():
+                if qty > 0:
+                    all_packs[pack_id] = all_packs.get(pack_id, 0) + qty
+        if all_packs:
+            pack_lines: list[str] = []
+            for pack_id, qty in all_packs.items():
+                try:
+                    pack = await Pack.get(id=pack_id)
+                    pack_lines.append(f"**{pack.name}** x{qty}")
+                except Exception:
+                    pack_lines.append(f"Pack #{pack_id} x{qty}")
+            win_embed.add_field(
+                name="🎁  Packs received",
+                value="\n".join(pack_lines),
+                inline=False,
+            )
+
+        try:
+            await channel.send(embed=win_embed)
         except Exception:
             pass

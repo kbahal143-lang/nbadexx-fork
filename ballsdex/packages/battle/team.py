@@ -115,7 +115,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
         """Add a player card to your lineup at a specific position."""
         await interaction.response.defer(ephemeral=True)
 
-        inst = card
+        inst = await BallInstance.get(pk=card.pk).prefetch_related("ball")
         ball = inst.ball
         pos = position.value
 
