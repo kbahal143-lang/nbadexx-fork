@@ -312,9 +312,17 @@ class MatchBulkStakeView(Pages):
         self.cog = cog
 
     async def set_options(self, balls: AsyncIterator[BallInstance]):
+        # Collect PKs from the cached iterator, then re-fetch with ball prefetched in one
+        # query — the CountryballsSource cache stores BallInstance without prefetch_related,
+        # so accessing .ball on those objects returns an unresolved QuerySet.
+        pks = [b.pk async for b in balls]
+        fresh_balls = await BallInstance.filter(pk__in=pks).prefetch_related("ball")
+        ball_map = {b.pk: b for b in fresh_balls}
+
         options: List[discord.SelectOption] = []
-        async for ball in balls:
-            if not ball.tradeable:
+        for pk in pks:
+            ball = ball_map.get(pk)
+            if not ball or not ball.tradeable:
                 continue
             emoji = self.bot.get_emoji(int(ball.ball.emoji_id))
             favorite = f"{settings.favorited_collectible_emoji} " if ball.favorite else ""
@@ -326,7 +334,7 @@ class MatchBulkStakeView(Pages):
                     f"Caught on {ball.catch_date.strftime('%d/%m/%y %H:%M')}",
                     emoji=emoji,
                     value=f"{ball.pk}",
-                    default=ball in self.balls_selected,
+                    default=False,
                 )
             )
         self.select_ball_menu.options = options
@@ -384,13 +392,6 @@ class MatchBulkStakeView(Pages):
 
         stake = session.stakes[interaction.user.id]
 
-        if any(ball.pk in stake.ball_ids for ball in self.balls_selected):
-            return await interaction.followup.send(
-                "You have already added some of the "
-                f"{settings.plural_collectible_name} you selected.",
-                ephemeral=True,
-            )
-
         if len(self.balls_selected) == 0:
             return await interaction.followup.send(
                 f"You have not selected any {settings.plural_collectible_name} "
@@ -425,6 +426,10 @@ class MatchBulkStakeView(Pages):
 
         failed = []
         for ball in self.balls_selected:
+            # Already in this stake (Discord can re-send old pk values when the dropdown
+            # remembers previous selections) — skip silently, not a failure.
+            if ball.pk in stake.ball_ids:
+                continue
             await ball.refresh_from_db()
             if ball.deleted:
                 failed.append(f"#{ball.pk:0X} is no longer available")
@@ -584,15 +589,16 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
         try:
             ch_team = await Team.get(player=ch_player)
-            if not ch_team.is_complete():
-                await interaction.followup.send(
-                    "❌ Your lineup is not complete. Use `/team add` or `/team best` to fill all 5 positions first.",
-                    ephemeral=True,
-                )
-                return
         except DoesNotExist:
             await interaction.followup.send(
                 "❌ You don't have a lineup set. Use `/team add` or `/team best` to build one first.",
+                ephemeral=True,
+            )
+            return
+        if not ch_team.is_complete():
+            await interaction.followup.send(
+                "❌ Your lineup isn't full yet. You need all 5 positions filled "
+                "(PG, SG, SF, PF, C) before you can challenge someone.",
                 ephemeral=True,
             )
             return
@@ -607,15 +613,16 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
         try:
             cd_team = await Team.get(player=cd_player)
-            if not cd_team.is_complete():
-                await interaction.followup.send(
-                    f"❌ **{member.display_name}** doesn't have a complete lineup yet.",
-                    ephemeral=True,
-                )
-                return
         except DoesNotExist:
             await interaction.followup.send(
                 f"❌ **{member.display_name}** doesn't have a lineup set.",
+                ephemeral=True,
+            )
+            return
+        if not cd_team.is_complete():
+            await interaction.followup.send(
+                f"❌ **{member.display_name}**'s lineup isn't full. "
+                "They need all 5 positions filled before they can be challenged.",
                 ephemeral=True,
             )
             return
@@ -1090,7 +1097,6 @@ class MatchCog(commands.GroupCog, group_name="match"):
         slots_a = await load_slots(ch_team)
         slots_b = await load_slots(cd_team)
 
-        # ── Re-verify both teams are still complete (cards may have been traded during staking)
         missing_a = [pos for pos in ("PG", "SG", "SF", "PF", "C") if not slots_a.get(pos)]
         missing_b = [pos for pos in ("PG", "SG", "SF", "PF", "C") if not slots_b.get(pos)]
         if missing_a or missing_b:
@@ -1099,16 +1105,15 @@ class MatchCog(commands.GroupCog, group_name="match"):
             try:
                 channel = self.bot.get_channel(session.channel_id)
                 if channel:
+                    parts = []
                     if missing_a:
-                        await channel.send(
-                            f"❌ **{ch_name}**'s team is missing: {', '.join(missing_a)}. "
-                            "Match cancelled — all stakes returned."
-                        )
+                        parts.append(f"{ch_name} is missing positions: {', '.join(missing_a)}")
                     if missing_b:
-                        await channel.send(
-                            f"❌ **{cd_name}**'s team is missing: {', '.join(missing_b)}. "
-                            "Match cancelled — all stakes returned."
-                        )
+                        parts.append(f"{cd_name} is missing positions: {', '.join(missing_b)}")
+                    await channel.send(
+                        "❌ Match cancelled — one or both lineups are incomplete:\n"
+                        + "\n".join(parts)
+                    )
             except Exception:
                 pass
             return
