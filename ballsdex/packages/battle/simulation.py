@@ -568,10 +568,13 @@ async def run_match(
                 continue
             break
 
-        # If still tied after OT possessions, give random 2 pts to break
+        # If still tied after OT possessions, randomly give 2 pts to break
         if team_a.score == team_b.score:
-            team_a.score += 2
-            plays.append(f"🏀  Last-second bucket by {team_a.pg.short_name if team_a.pg else 'mystery player'}! (+2)")
+            lucky = random.choice([team_a, team_b])
+            lucky.score += 2
+            hero = lucky.pg or lucky.sg or lucky.sf or lucky.pf or lucky.c
+            hero_name = hero.short_name if hero else "mystery player"
+            plays.append(f"🏀  Last-second bucket by {hero_name} — BUZZER BEATER! (+2)")
 
     winner = team_a if team_a.score > team_b.score else team_b
     loser = team_b if winner is team_a else team_a

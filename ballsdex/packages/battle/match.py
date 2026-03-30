@@ -166,12 +166,21 @@ class MatchStakeView(discord.ui.View):
             return
 
         self.session.locked.add(interaction.user.id)
+
+        # Capture BEFORE any await — only the player who brings locked to exactly 2
+        # should start the simulation. Set status synchronously right now so any
+        # duplicate button press that arrives after this point sees "simulating"
+        # and bails out at the top-of-handler status check.
+        i_triggered_start = len(self.session.locked) == 2
+        if i_triggered_start:
+            self.session.status = "simulating"
+
         await interaction.response.defer()
 
-        if len(self.session.locked) >= 2:
+        if i_triggered_start:
             # Both locked — start simulation
             await interaction.channel.send(
-                f"🏀 Both players locked in! Starting the match..."
+                "🏀 Both players locked in! Starting the match..."
             )
             asyncio.create_task(self.cog.start_simulation(self.session))
         else:
@@ -191,6 +200,12 @@ class MatchStakeView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.session.is_participant(interaction.user.id):
             await interaction.response.send_message("Not your match!", ephemeral=True)
+            return
+        if self.session.status == "simulating":
+            await interaction.response.send_message(
+                "⚠️ The match is already being simulated — it can't be cancelled now.",
+                ephemeral=True,
+            )
             return
         await interaction.response.defer()
         await self.cog.cancel_match(self.session, cancelled_by=interaction.user.id)
@@ -383,6 +398,17 @@ class MatchBulkStakeView(Pages):
                 ephemeral=True,
             )
 
+        # Deduplicate by pk — navigating pages can produce two Python objects for the same
+        # card (Set uses object identity, not pk equality) which would cause the second
+        # copy to appear as a "failed" card even though it was already staked.
+        seen_pks: set[int] = set()
+        unique_selected: list = []
+        for ball in self.balls_selected:
+            if ball.pk not in seen_pks:
+                seen_pks.add(ball.pk)
+                unique_selected.append(ball)
+        self.balls_selected = set(unique_selected)
+
         has_favorite = any(ball.favorite for ball in self.balls_selected)
         if has_favorite:
             from ballsdex.core.utils.buttons import ConfirmChoiceView
@@ -465,8 +491,10 @@ class MatchCog(commands.GroupCog, group_name="match"):
             maxsize=1000, ttl=3600
         )
         # Maps session_key -> unix timestamp when the cooldown expires.
-        # Prevents the same two players from spamming challenges after a match ends.
-        self._challenge_cooldowns: dict[tuple[int, int], float] = {}
+        # TTLCache auto-expires entries so the dict never grows unboundedly.
+        self._challenge_cooldowns: TTLCache[tuple[int, int], float] = TTLCache(
+            maxsize=10_000, ttl=CHALLENGE_COOLDOWN_SECS + 10
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id != BATTLE_GUILD_ID:
@@ -477,10 +505,18 @@ class MatchCog(commands.GroupCog, group_name="match"):
         return True
 
     def _get_session(self, user_id: int) -> MatchSession | None:
+        """Return an active session for a user that is in pending or staking phase."""
         for key, session in self.active_matches.items():
             if session.is_participant(user_id) and session.status not in ("done", "simulating"):
                 return session
         return None
+
+    def _is_in_any_active_match(self, user_id: int) -> bool:
+        """True if user is in any match that hasn't finished yet (includes simulating)."""
+        for session in self.active_matches.values():
+            if session.is_participant(user_id) and session.status != "done":
+                return True
+        return False
 
     def _session_key(self, a: int, b: int) -> tuple[int, int]:
         return (min(a, b), max(a, b))
@@ -524,14 +560,14 @@ class MatchCog(commands.GroupCog, group_name="match"):
             )
             return
 
-        # Block both users from being in two matches at once — prevents double-spend exploits
-        if self._get_session(interaction.user.id):
+        # Block both users from being in two matches at once — includes simulating matches
+        if self._is_in_any_active_match(interaction.user.id):
             await interaction.followup.send(
-                "❌ You're already in an active match. Finish or cancel it before starting a new one.",
+                "❌ You're already in an active match. Finish it before starting a new one.",
                 ephemeral=True,
             )
             return
-        if self._get_session(member.id):
+        if self._is_in_any_active_match(member.id):
             await interaction.followup.send(
                 f"❌ **{member.display_name}** is already in an active match and can't be challenged right now.",
                 ephemeral=True,
@@ -657,6 +693,16 @@ class MatchCog(commands.GroupCog, group_name="match"):
         stake = session.stakes[interaction.user.id]
         msgs: list[str] = []
 
+        # Track whether we locked a card in THIS call so we can roll it back if a later
+        # check (coins / packs) fails — prevents silent partial stakes.
+        card_locked_this_call: int | None = None
+
+        async def _rollback_card():
+            """Undo a card lock committed earlier in this same command invocation."""
+            if card_locked_this_call is not None:
+                stake.ball_ids.remove(card_locked_this_call)
+                await BallInstance.filter(pk=card_locked_this_call).update(tradeable=True)
+
         # ── Card stake
         if card is not None:
             inst = await BallInstance.get(pk=card.pk).prefetch_related("ball")
@@ -682,17 +728,19 @@ class MatchCog(commands.GroupCog, group_name="match"):
                 )
                 return
             stake.ball_ids.append(inst.pk)
-            # Lock the card immediately so it can't be traded elsewhere
             await BallInstance.filter(pk=inst.pk).update(tradeable=False)
+            card_locked_this_call = inst.pk
             msgs.append(f"🎴 **{inst.ball.country}** added to your stakes.")
 
         # ── Coin stake
         if coins is not None:
             if coins <= 0:
+                await _rollback_card()
                 await interaction.followup.send("❌ Coins must be positive.", ephemeral=True)
                 return
             money, _ = await PlayerMoney.get_or_create(player=player)
             if money.coins < coins:
+                await _rollback_card()
                 await interaction.followup.send(
                     f"❌ Not enough coins. You have **{money.coins:,}** coins.",
                     ephemeral=True,
@@ -707,11 +755,13 @@ class MatchCog(commands.GroupCog, group_name="match"):
         # ── Pack stake
         if pack is not None:
             if pack_amount <= 0:
+                await _rollback_card()
                 await interaction.followup.send("❌ Pack amount must be at least 1.", ephemeral=True)
                 return
             pp = await PlayerPack.get_or_none(player=player, pack=pack)
             owned_qty = pp.quantity if pp else 0
             if owned_qty < pack_amount:
+                await _rollback_card()
                 already_staked = stake.packs.get(pack.pk, 0)
                 await interaction.followup.send(
                     f"❌ You only have **{owned_qty}** of that pack available"
@@ -863,6 +913,14 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
         session = self._get_session(interaction.user.id)
         if not session:
+            # Check if they're in a simulating match — give a clearer message
+            for s in self.active_matches.values():
+                if s.is_participant(interaction.user.id) and s.status == "simulating":
+                    await interaction.followup.send(
+                        "⚠️ Your match is currently being simulated — it can't be cancelled now.",
+                        ephemeral=True,
+                    )
+                    return
             await interaction.followup.send("You don't have an active match.", ephemeral=True)
             return
 
@@ -985,6 +1043,9 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
     async def start_simulation(self, session: MatchSession):
         """Run the match simulation — called after both players lock in."""
+        # Guard: if somehow called twice (race condition), the second call exits immediately.
+        if session.status == "done":
+            return
         session.status = "simulating"
 
         guild = self.bot.get_guild(session.guild_id)
