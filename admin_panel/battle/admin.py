@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import PlayerPosition, Team
+from .models import PlayerPosition, Team, MatchResult
 
 
 @admin.register(PlayerPosition)
@@ -57,3 +57,12 @@ class TeamAdmin(admin.ModelAdmin):
     @admin.display(description="C")
     def c_name(self, obj):
         return obj.c.ball.country if obj.c_id else "—"
+
+
+@admin.register(MatchResult)
+class MatchResultAdmin(admin.ModelAdmin):
+    list_display = ("played_at", "challenger_discord_id", "challenged_discord_id", "winner_discord_id", "winner_score", "loser_score")
+    list_filter = ()
+    search_fields = ("challenger_discord_id", "challenged_discord_id", "winner_discord_id")
+    ordering = ("-played_at",)
+    readonly_fields = ("played_at",)

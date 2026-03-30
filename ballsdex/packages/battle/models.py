@@ -94,3 +94,17 @@ class Team(Model):
             self.pf_id = value
         elif pos == "C":
             self.c_id = value
+
+
+class MatchResult(Model):
+    """Records every completed battle match for stats and daily reward tracking."""
+
+    challenger_discord_id = fields.BigIntField()
+    challenged_discord_id = fields.BigIntField()
+    winner_discord_id = fields.BigIntField()
+    winner_score = fields.IntField()
+    loser_score = fields.IntField()
+    played_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "battle_matchresult"

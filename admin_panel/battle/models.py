@@ -70,3 +70,23 @@ class Team(models.Model):
 
     def is_complete(self) -> bool:
         return all([self.pg_id, self.sg_id, self.sf_id, self.pf_id, self.c_id])
+
+
+class MatchResult(models.Model):
+    """Records every completed battle match for stats and daily reward tracking."""
+
+    challenger_discord_id = models.BigIntegerField()
+    challenged_discord_id = models.BigIntegerField()
+    winner_discord_id = models.BigIntegerField()
+    winner_score = models.IntegerField()
+    loser_score = models.IntegerField()
+    played_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "battle_matchresult"
+        verbose_name = "Match Result"
+        verbose_name_plural = "Match Results"
+        ordering = ["-played_at"]
+
+    def __str__(self):
+        return f"Match @ {self.played_at:%Y-%m-%d %H:%M} | Winner: {self.winner_discord_id}"

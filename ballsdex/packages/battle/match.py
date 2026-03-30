@@ -5,7 +5,9 @@ Handles match challenges, staking, and simulation launching.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncIterator, List, Set, cast
 
 import discord
@@ -13,6 +15,7 @@ from cachetools import TTLCache
 from discord import app_commands
 from discord.ext import commands
 from tortoise.exceptions import DoesNotExist
+from tortoise.expressions import Q
 
 from ballsdex.core.models import Ball, BallInstance, Player
 from ballsdex.core.utils.paginator import Pages
@@ -28,7 +31,7 @@ from ballsdex.packages.balls.countryballs_paginator import CountryballsSource
 from ballsdex.packages.coins.models import Pack, PlayerMoney, PlayerPack
 from ballsdex.packages.coins.transformers import PackTransform
 
-from .models import PlayerPosition, Team
+from .models import PlayerPosition, Team, MatchResult
 from .simulation import build_sim_teams, run_match
 from .team import get_or_detect_position, is_base_card
 
@@ -42,6 +45,13 @@ log = logging.getLogger("ballsdex.packages.battle")
 # commands should be allowed. Matches are blocked everywhere else.
 # ──────────────────────────────────────────────────────────
 BATTLE_GUILD_ID = 1440962506796433519
+
+# Coin reward given to BOTH winner and loser at the end of every completed match.
+MATCH_COIN_REWARD = 50_000
+# Maximum number of times a user can collect the match reward in a single UTC day.
+MATCH_REWARD_DAILY_LIMIT = 10
+# Cooldown in seconds before the same two players can challenge each other again.
+CHALLENGE_COOLDOWN_SECS = 180
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -402,8 +412,15 @@ class MatchBulkStakeView(Pages):
             await BallInstance.filter(pk=ball.pk).update(tradeable=False)
             stake.ball_ids.append(ball.pk)
 
+        added = len(self.balls_selected) - len(failed)
+
+        # Always refresh the stake embed if at least one card was added
+        if added > 0:
+            await self.cog.update_stake_embed(session)
+
         if failed:
             fail_text = "\n".join(failed)
+            self.balls_selected.clear()
             return await interaction.followup.send(
                 f"Some {settings.plural_collectible_name} could not be added:\n{fail_text}",
                 ephemeral=True,
@@ -418,7 +435,6 @@ class MatchBulkStakeView(Pages):
             f"{len(self.balls_selected)} {grammar} added to your stake.", ephemeral=True
         )
         self.balls_selected.clear()
-        await self.cog.update_stake_embed(session)
 
     @discord.ui.button(label="Clear", style=discord.ButtonStyle.danger)
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -448,6 +464,9 @@ class MatchCog(commands.GroupCog, group_name="match"):
         self.active_matches: TTLCache[tuple, MatchSession] = TTLCache(
             maxsize=1000, ttl=3600
         )
+        # Maps session_key -> unix timestamp when the cooldown expires.
+        # Prevents the same two players from spamming challenges after a match ends.
+        self._challenge_cooldowns: dict[tuple[int, int], float] = {}
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id != BATTLE_GUILD_ID:
@@ -489,6 +508,18 @@ class MatchCog(commands.GroupCog, group_name="match"):
             await interaction.followup.send(
                 "There's already an active match between you two! "
                 "Use `/match cancel` to cancel it first.",
+                ephemeral=True,
+            )
+            return
+
+        # 3-minute cooldown between the same pair after a match ends or is cancelled
+        cooldown_remaining = self._challenge_cooldowns.get(key, 0) - time.time()
+        if cooldown_remaining > 0:
+            mins = int(cooldown_remaining // 60)
+            secs = int(cooldown_remaining % 60)
+            wait_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+            await interaction.followup.send(
+                f"❌ You two recently played. Please wait **{wait_str}** before challenging again.",
                 ephemeral=True,
             )
             return
@@ -842,15 +873,27 @@ class MatchCog(commands.GroupCog, group_name="match"):
     # Internal helpers
     # ─────────────────────────────────────────────────────────────────
 
+    async def _resolve_member_name(
+        self, guild: discord.Guild | None, user_id: int
+    ) -> str:
+        """Return display name for a user — falls back to API fetch if not in cache."""
+        if guild is None:
+            return f"<@{user_id}>"
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                pass
+        return member.display_name if member else f"<@{user_id}>"
+
     async def send_stake_embed(
         self, session: MatchSession, channel: discord.abc.Messageable
     ):
         """Send the stake management embed after the challenge is accepted."""
         guild = self.bot.get_guild(session.guild_id)
-        ch_member = guild.get_member(session.challenger_id) if guild else None
-        cd_member = guild.get_member(session.challenged_id) if guild else None
-        ch_name = ch_member.display_name if ch_member else f"<@{session.challenger_id}>"
-        cd_name = cd_member.display_name if cd_member else f"<@{session.challenged_id}>"
+        ch_name = await self._resolve_member_name(guild, session.challenger_id)
+        cd_name = await self._resolve_member_name(guild, session.challenged_id)
 
         embed = await _build_stake_embed(session, guild, ch_name, cd_name)
         view = MatchStakeView(session, self)
@@ -863,10 +906,8 @@ class MatchCog(commands.GroupCog, group_name="match"):
         if not session.message:
             return
         guild = self.bot.get_guild(session.guild_id)
-        ch_member = guild.get_member(session.challenger_id) if guild else None
-        cd_member = guild.get_member(session.challenged_id) if guild else None
-        ch_name = ch_member.display_name if ch_member else f"<@{session.challenger_id}>"
-        cd_name = cd_member.display_name if cd_member else f"<@{session.challenged_id}>"
+        ch_name = await self._resolve_member_name(guild, session.challenger_id)
+        cd_name = await self._resolve_member_name(guild, session.challenged_id)
         embed = await _build_stake_embed(session, guild, ch_name, cd_name)
         try:
             await session.message.edit(embed=embed, view=session.view)
@@ -910,17 +951,27 @@ class MatchCog(commands.GroupCog, group_name="match"):
                 pp.quantity += qty
                 await pp.save()
 
+        # Set 3-minute cooldown so same pair can't instantly re-challenge
+        self._challenge_cooldowns[session.session_key] = time.time() + CHALLENGE_COOLDOWN_SECS
+
         # Edit the stake message
         if session.message:
             guild = self.bot.get_guild(session.guild_id)
             name = "Unknown"
             if cancelled_by and guild:
                 m = guild.get_member(cancelled_by)
-                name = m.display_name if m else str(cancelled_by)
+                if m is None:
+                    # Member not in local cache — fetch from Discord API
+                    try:
+                        m = await guild.fetch_member(cancelled_by)
+                    except Exception:
+                        pass
+                name = m.display_name if m else f"<@{cancelled_by}>"
 
             reason_str = {
-                "timeout": "⏰ Match expired due to inactivity.",
+                "timeout":   "⏰ Match expired due to inactivity.",
                 "cancelled": f"❌ Match cancelled by **{name}**.",
+                "error":     "⚠️ Match cancelled due to an internal error. All stakes have been returned.",
             }.get(reason, f"❌ Match cancelled by **{name}**.")
 
             try:
@@ -977,6 +1028,56 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
         slots_a = await load_slots(ch_team)
         slots_b = await load_slots(cd_team)
+
+        # ── Re-verify both teams are still complete (cards may have been traded during staking)
+        missing_a = [pos for pos in ("PG", "SG", "SF", "PF", "C") if not slots_a.get(pos)]
+        missing_b = [pos for pos in ("PG", "SG", "SF", "PF", "C") if not slots_b.get(pos)]
+        if missing_a or missing_b:
+            session.status = "staking"
+            await self.cancel_match(session, cancelled_by=None, reason="cancelled")
+            try:
+                channel = self.bot.get_channel(session.channel_id)
+                if channel:
+                    if missing_a:
+                        await channel.send(
+                            f"❌ **{ch_name}**'s team is missing: {', '.join(missing_a)}. "
+                            "Match cancelled — all stakes returned."
+                        )
+                    if missing_b:
+                        await channel.send(
+                            f"❌ **{cd_name}**'s team is missing: {', '.join(missing_b)}. "
+                            "Match cancelled — all stakes returned."
+                        )
+            except Exception:
+                pass
+            return
+
+        # ── Verify card ownership hasn't changed since staking
+        # (a card that was traded away during staking should not play for this team)
+        def ownership_errors(slots: dict, player_pk: int, owner_name: str) -> list[str]:
+            errs = []
+            for pos, inst in slots.items():
+                if inst and inst.player_id != player_pk:
+                    errs.append(f"{owner_name}'s **{pos}** card is no longer owned by them")
+            return errs
+
+        ownership_errs = (
+            ownership_errors(slots_a, ch_player.pk, ch_name)
+            + ownership_errors(slots_b, cd_player.pk, cd_name)
+        )
+        if ownership_errs:
+            session.status = "staking"
+            await self.cancel_match(session, cancelled_by=None, reason="cancelled")
+            try:
+                channel = self.bot.get_channel(session.channel_id)
+                if channel:
+                    for err in ownership_errs:
+                        await channel.send(
+                            f"❌ {err} — match cancelled, all stakes returned."
+                        )
+            except Exception:
+                pass
+            return
 
         team_a_sim, team_b_sim = build_sim_teams(ch_name, slots_a, cd_name, slots_b)
 
@@ -1055,9 +1156,36 @@ class MatchCog(commands.GroupCog, group_name="match"):
         # false result if both players happen to share the same display name)
         winner_id = session.challenger_id if winner_sim is team_a_sim else session.challenged_id
         loser_id = session.challenged_id if winner_id == session.challenger_id else session.challenger_id
+        loser_sim = team_b_sim if winner_sim is team_a_sim else team_a_sim
 
         winner_player = await Player.get_or_none(discord_id=winner_id)
         loser_player = await Player.get_or_none(discord_id=loser_id)
+
+        # ── Daily reward tracking — count BEFORE saving so current match isn't double-counted
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        winner_today = await MatchResult.filter(
+            Q(challenger_discord_id=winner_id) | Q(challenged_discord_id=winner_id),
+            played_at__gte=today_start,
+        ).count()
+        loser_today = await MatchResult.filter(
+            Q(challenger_discord_id=loser_id) | Q(challenged_discord_id=loser_id),
+            played_at__gte=today_start,
+        ).count()
+
+        # ── Save match result to DB
+        try:
+            await MatchResult.create(
+                challenger_discord_id=session.challenger_id,
+                challenged_discord_id=session.challenged_id,
+                winner_discord_id=winner_id,
+                winner_score=winner_sim.score,
+                loser_score=loser_sim.score,
+            )
+        except Exception:
+            log.exception("Failed to save MatchResult")
+
+        # ── Set 3-minute challenge cooldown for this pair
+        self._challenge_cooldowns[session.session_key] = time.time() + CHALLENGE_COOLDOWN_SECS
         winner_stake = session.stakes.get(winner_id, UserStake())
         loser_stake = session.stakes.get(loser_id, UserStake())
 
@@ -1100,6 +1228,30 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
         session.status = "done"
         self.active_matches.pop(session.session_key, None)
+
+        # ── Give 50k flat match reward to both players (each capped at 10/day independently)
+        # Anti-exploit: reward only on COMPLETED matches, each user tracked separately,
+        # limit resets at UTC midnight, and the 3-minute cooldown prevents rapid farming.
+        winner_reward_given = False
+        loser_reward_given = False
+
+        if winner_today < MATCH_REWARD_DAILY_LIMIT and winner_player:
+            try:
+                wm, _ = await PlayerMoney.get_or_create(player=winner_player)
+                wm.coins += MATCH_COIN_REWARD
+                await wm.save()
+                winner_reward_given = True
+            except Exception:
+                log.exception("Failed to give match reward to winner")
+
+        if loser_today < MATCH_REWARD_DAILY_LIMIT and loser_player:
+            try:
+                lm, _ = await PlayerMoney.get_or_create(player=loser_player)
+                lm.coins += MATCH_COIN_REWARD
+                await lm.save()
+                loser_reward_given = True
+            except Exception:
+                log.exception("Failed to give match reward to loser")
 
         # ── Build win announcement embed ──────────────────────────────
         winner_mention = (
@@ -1151,6 +1303,37 @@ class MatchCog(commands.GroupCog, group_name="match"):
             win_embed.add_field(
                 name="🎁  Packs received",
                 value="\n".join(pack_lines),
+                inline=False,
+            )
+
+        # ── Match completion reward — 50k to both players (if under daily limit)
+        reward_lines: list[str] = []
+        if winner_reward_given:
+            used_after = winner_today + 1
+            reward_lines.append(
+                f"🏆 **{winner_sim.owner}** +{MATCH_COIN_REWARD:,} coins "
+                f"({used_after}/{MATCH_REWARD_DAILY_LIMIT} today)"
+            )
+        elif winner_today >= MATCH_REWARD_DAILY_LIMIT:
+            reward_lines.append(
+                f"🏆 **{winner_sim.owner}** — daily reward limit reached "
+                f"({MATCH_REWARD_DAILY_LIMIT}/{MATCH_REWARD_DAILY_LIMIT} today)"
+            )
+        if loser_reward_given:
+            used_after = loser_today + 1
+            reward_lines.append(
+                f"❌ **{loser_sim.owner}** +{MATCH_COIN_REWARD:,} coins "
+                f"({used_after}/{MATCH_REWARD_DAILY_LIMIT} today)"
+            )
+        elif loser_today >= MATCH_REWARD_DAILY_LIMIT:
+            reward_lines.append(
+                f"❌ **{loser_sim.owner}** — daily reward limit reached "
+                f"({MATCH_REWARD_DAILY_LIMIT}/{MATCH_REWARD_DAILY_LIMIT} today)"
+            )
+        if reward_lines:
+            win_embed.add_field(
+                name="🪙  Match Completion Rewards",
+                value="\n".join(reward_lines),
                 inline=False,
             )
 

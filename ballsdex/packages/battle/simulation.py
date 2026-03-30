@@ -455,6 +455,21 @@ def _build_final_embed(
     b_stats = "\n".join(_fmt_player_stats(p) for p in team_b.players())
     embed.add_field(name=f"🔵  {team_b.owner}'s Stats", value=b_stats or "—", inline=False)
 
+    # MVP — highest scorer from the winning team
+    winner_players = winner.players()
+    if winner_players:
+        mvp = max(winner_players, key=lambda p: p.pts)
+        if mvp.pts > 0:
+            embed.add_field(
+                name="🏅  MVP",
+                value=(
+                    f"**{mvp.name}**  —  "
+                    f"{mvp.pts} pts | {mvp.reb} reb | {mvp.ast} ast | "
+                    f"{mvp.stl} stl | {mvp.blk} blk"
+                ),
+                inline=False,
+            )
+
     # Stakes
     if stake_winner_text or stake_loser_text:
         stakes_text = ""

@@ -265,9 +265,10 @@ class TeamCog(commands.GroupCog, group_name="team"):
             await interaction.followup.send("You don't have any cards yet.", ephemeral=True)
             return
 
-        # Fetch all owned enabled BallInstances
+        # Fetch all owned, non-locked BallInstances
+        # Exclude tradeable=False cards — they are currently staked in a match or bet
         all_insts = (
-            await BallInstance.filter(player=player)
+            await BallInstance.filter(player=player, tradeable=True)
             .prefetch_related("ball")
         )
 
@@ -367,13 +368,16 @@ class TeamCog(commands.GroupCog, group_name="team"):
             if slot_id:
                 try:
                     inst = await BallInstance.get(pk=slot_id).prefetch_related("ball")
-                    stars = "⭐" * max(1, round(inst.ball.rarity * 5))
-                    lines.append(
-                        f"**{pos}** · {inst.ball.country}  {stars}\n"
-                        f"  ⚔ {inst.attack}  🛡 {inst.health}"
-                    )
-                    total_atk += inst.attack
-                    total_hp += inst.health
+                    if inst.player_id != player.pk:
+                        lines.append(f"**{pos}** · *(card no longer owned)*")
+                    else:
+                        stars = "⭐" * max(1, round(inst.ball.rarity * 5))
+                        lines.append(
+                            f"**{pos}** · {inst.ball.country}  {stars}\n"
+                            f"  ⚔ {inst.attack}  🛡 {inst.health}"
+                        )
+                        total_atk += inst.attack
+                        total_hp += inst.health
                 except DoesNotExist:
                     lines.append(f"**{pos}** · *(card no longer owned)*")
             else:
