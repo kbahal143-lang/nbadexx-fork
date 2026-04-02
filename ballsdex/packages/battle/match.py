@@ -47,7 +47,7 @@ log = logging.getLogger("ballsdex.packages.battle")
 BATTLE_GUILD_ID = 1440962506796433519
 
 # Coin reward given to BOTH winner and loser at the end of every completed match.
-MATCH_COIN_REWARD = 50_000
+MATCH_COIN_REWARD = 10_000
 # Maximum number of times a user can collect the match reward in a single UTC day.
 MATCH_REWARD_DAILY_LIMIT = 10
 # Cooldown in seconds before the same two players can challenge each other again.
