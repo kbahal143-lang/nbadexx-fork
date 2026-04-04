@@ -225,7 +225,7 @@ class Coins(commands.GroupCog, group_name="coins"):
         self,
         interaction: discord.Interaction,
         user: discord.User,
-        amount: int,
+        amount: str,
     ):
         """
         Give coins to another user.
@@ -234,9 +234,28 @@ class Coins(commands.GroupCog, group_name="coins"):
         ----------
         user: discord.User
             The user you want to give coins to
-        amount: int
-            Number of coins to give
+        amount: str
+            Number of coins to give (supports math like 400x9, 500*3, 1000+500)
         """
+        import re
+        raw = amount.strip().replace(",", "").replace("x", "*").replace("X", "*")
+        if not re.fullmatch(r"[\d+\-*/. ]+", raw):
+            await interaction.response.send_message(
+                "Invalid amount! Use numbers and math like `400x9`, `500*3`, or `1000+500`.",
+                ephemeral=True,
+            )
+            return
+        try:
+            calculated = int(eval(raw))
+        except Exception:
+            await interaction.response.send_message(
+                "Could not calculate that amount! Try something like `400x9` or `1000+500`.",
+                ephemeral=True,
+            )
+            return
+
+        amount = calculated
+
         if user.id == interaction.user.id:
             await interaction.response.send_message("You cannot give coins to yourself!", ephemeral=True)
             return
