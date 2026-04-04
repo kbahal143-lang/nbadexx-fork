@@ -81,3 +81,4 @@ class BallValue(models.Model):
     id: int
     ball = models.OneToOneField(Ball, on_delete=models.CASCADE)
     quicksell_value = models.IntegerField(help_text="Coins received when quickselling this ball", default=100)
+    catch_value = models.IntegerField(help_text="Coins earned when catching this ball from a natural/admin spawn (0 = no reward)", default=100)

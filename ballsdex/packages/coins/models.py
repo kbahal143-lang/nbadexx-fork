@@ -103,6 +103,7 @@ class BallValue(models.Model):
     id: int
     ball: fields.OneToOneRelation[Ball] = fields.OneToOneField("models.Ball", related_name="ballvalue", on_delete=fields.CASCADE)
     quicksell_value = fields.IntField(description="Coins received when quickselling this ball", default=100)
+    catch_value = fields.IntField(description="Coins earned when catching from natural/admin spawn", default=100)
 
     class Meta:
         table = "coins_ballvalue"

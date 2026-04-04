@@ -101,8 +101,21 @@ class CountryballNamePrompt(Modal, title=f"Catch this {settings.collectible_name
             interaction.user, player=player, guild=interaction.guild
         )
 
+        catch_coins = 0
+        if not self.view.ballinstance:
+            from ballsdex.packages.coins.models import BallValue, PlayerMoney
+            bv = await BallValue.get_or_none(ball=self.view.model)
+            catch_coins = bv.catch_value if bv else 100
+            if catch_coins > 0:
+                money, _ = await PlayerMoney.get_or_create(player=player)
+                money.coins += catch_coins
+                await money.save(update_fields=["coins"])
+
         await interaction.followup.send(
-            self.view.get_catch_message(ball, has_caught_before, interaction.user.mention, catcher_id=interaction.user.id),
+            self.view.get_catch_message(
+                ball, has_caught_before, interaction.user.mention,
+                catcher_id=interaction.user.id, catch_coins=catch_coins,
+            ),
             allowed_mentions=discord.AllowedMentions(users=player.can_be_mentioned),
         )
         await interaction.followup.edit_message(self.view.message.id, view=self.view)
@@ -412,7 +425,8 @@ class BallSpawnView(View):
         return ball, is_new
 
     def get_catch_message(
-        self, ball: BallInstance, new_ball: bool, mention: str, catcher_id: int | None = None
+        self, ball: BallInstance, new_ball: bool, mention: str, catcher_id: int | None = None,
+        catch_coins: int = 0,
     ) -> str:
         """
         Generate a user-facing message after a ball has been caught.
@@ -426,6 +440,8 @@ class BallSpawnView(View):
             (as returned by `catch_ball`)
         catcher_id: int | None
             Discord ID of the user who caught the ball
+        catch_coins: int
+            Coins awarded for this catch (0 = none / dropped ball)
         """
         text = ""
         if ball.specialcard and ball.specialcard.catch_phrase:
@@ -449,7 +465,9 @@ class BallSpawnView(View):
             + " "
         )
 
+        coins_text = f" **(+{catch_coins:,} 💵)**" if catch_coins > 0 else ""
+
         return (
             caught_message
-            + f"`(#{ball.pk:0X}, {ball.attack_bonus:+}%/{ball.health_bonus:+}%)`\n{text}"
+            + f"`(#{ball.pk:0X}, {ball.attack_bonus:+}%/{ball.health_bonus:+}%)`{coins_text}\n{text}"
         )

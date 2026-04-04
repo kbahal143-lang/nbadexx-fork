@@ -20,6 +20,14 @@ class CardStyle(models.Model):
         related_name="card_styles",
         help_text="Which player cards use this style. A card not listed here keeps its default look.",
     )
+    special = models.ForeignKey(
+        "bd_models.Special",
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="card_styles",
+        help_text="Apply this style to ALL cards with this special. Leave empty to use the balls list instead.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

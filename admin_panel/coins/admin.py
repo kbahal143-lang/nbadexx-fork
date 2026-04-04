@@ -116,8 +116,8 @@ class PackOpenHistoryAdmin(admin.ModelAdmin):
 @admin.register(BallValue)
 class BallValueAdmin(admin.ModelAdmin):
     autocomplete_fields = ("ball",)
-    list_display = ("ball_name", "quicksell_value")
-    list_editable = ("quicksell_value",)
+    list_display = ("ball_name", "quicksell_value", "catch_value")
+    list_editable = ("quicksell_value", "catch_value")
     search_fields = ("ball__country",)
 
     def get_queryset(self, request):

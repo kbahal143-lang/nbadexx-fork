@@ -72,10 +72,12 @@ class CardStyleAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Preset Info", {
-            "fields": ("name", "balls"),
+            "fields": ("name", "special", "balls"),
             "description": (
                 "<div style='background:#d4edda;padding:10px;border-radius:6px;margin-bottom:8px;'>"
-                "<strong>How it works:</strong> Choose which player cards use this style. "
+                "<strong>How it works:</strong> Pick a <b>Special</b> to apply this style to ALL cards "
+                "with that special, OR choose individual cards below. "
+                "If a Special is set, it takes priority over the balls list. "
                 "Any card not assigned to a style will keep its original default appearance. "
                 "One card can only have one style — if a card appears in multiple presets, "
                 "the most recently updated preset wins."
