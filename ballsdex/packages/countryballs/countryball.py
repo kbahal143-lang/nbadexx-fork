@@ -102,7 +102,7 @@ class CountryballNamePrompt(Modal, title=f"Catch this {settings.collectible_name
         )
 
         await interaction.followup.send(
-            self.view.get_catch_message(ball, has_caught_before, interaction.user.mention),
+            self.view.get_catch_message(ball, has_caught_before, interaction.user.mention, catcher_id=interaction.user.id),
             allowed_mentions=discord.AllowedMentions(users=player.can_be_mentioned),
         )
         await interaction.followup.edit_message(self.view.message.id, view=self.view)
@@ -411,7 +411,9 @@ class BallSpawnView(View):
 
         return ball, is_new
 
-    def get_catch_message(self, ball: BallInstance, new_ball: bool, mention: str) -> str:
+    def get_catch_message(
+        self, ball: BallInstance, new_ball: bool, mention: str, catcher_id: int | None = None
+    ) -> str:
         """
         Generate a user-facing message after a ball has been caught.
 
@@ -422,17 +424,19 @@ class BallSpawnView(View):
         new_ball: bool
             Boolean indicating if this is a new countryball in completion
             (as returned by `catch_ball`)
+        catcher_id: int | None
+            Discord ID of the user who caught the ball
         """
         text = ""
         if ball.specialcard and ball.specialcard.catch_phrase:
             text += f"*{ball.specialcard.catch_phrase}*\n"
+        if self.ballinstance and catcher_id and catcher_id == self.og_id:
+            text += f"Caught your own drop? What a cheap thing to do.\n"
         if new_ball:
             text += (
-                f"This is a **new {settings.collectible_name}** "
-                "that has been added to your completion!"
+                f"\nThis is a **new {settings.collectible_name}** "
+                "that has been added to your completion!\n"
             )
-        if self.ballinstance:
-            text += f"This {settings.collectible_name} was dropped by <@{self.og_id}>\n"
 
         caught_message = (
             random.choice(settings.caught_messages).format(
@@ -447,5 +451,5 @@ class BallSpawnView(View):
 
         return (
             caught_message
-            + f"`(#{ball.pk:0X}, {ball.attack_bonus:+}%/{ball.health_bonus:+}%)`\n\n{text}"
+            + f"`(#{ball.pk:0X}, {ball.attack_bonus:+}%/{ball.health_bonus:+}%)`\n{text}"
         )

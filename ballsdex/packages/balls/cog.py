@@ -1070,7 +1070,7 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
             )
             return
 
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(thinking=True, ephemeral=True)
 
         if countryball.favorite:
             view = ConfirmChoiceView(
@@ -1139,19 +1139,15 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
         await interaction.response.defer(thinking=True)
 
         try:
-            # Get all players with their NBA counts
-            players = await Player.all().prefetch_related("balls")
-            
-            # Count NBAs for each player and sort
-            player_counts = []
-            for player in players:
-                count = len(player.balls)
-                if count > 0:  # Only include players with at least 1 NBA
-                    player_counts.append((player, count))
-            
-            # Sort by count descending and take top 10
-            top_10 = sorted(player_counts, key=lambda x: x[1], reverse=True)[:10]
-            
+            from tortoise import connections
+            conn = connections.get("default")
+            rows = await conn.execute_query_dict(
+                "SELECT player_id, COUNT(*) AS count FROM ballinstance "
+                "WHERE player_id IS NOT NULL AND deleted = false "
+                "GROUP BY player_id ORDER BY count DESC LIMIT 10"
+            )
+            top_10 = [(r["player_id"], r["count"]) for r in rows]
+
             if not top_10:
                 await interaction.followup.send(
                     "No players found with any NBAs yet.",
@@ -1159,47 +1155,44 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
                 )
                 return
 
-            # Calculate global stats
-            total_collected = sum(count for _, count in top_10)
-            max_count = top_10[0][1] if top_10 else 0
+            player_ids = [pid for pid, _ in top_10]
+            players_map = {}
+            for p in await Player.filter(id__in=player_ids):
+                players_map[p.id] = p
 
-            # Create embed with professional styling
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+            entries = []
+
+            for idx, (player_id, count) in enumerate(top_10, 1):
+                player = players_map.get(player_id)
+                if not player:
+                    continue
+                user = self.bot.get_user(player.discord_id)
+                if not user:
+                    try:
+                        user = await self.bot.fetch_user(player.discord_id)
+                    except discord.NotFound:
+                        user = None
+                dname = (user.display_name[:18] if user else "Unknown")
+                entries.append((idx, dname, count))
+
             embed = discord.Embed(
-                title="🏆 NBA COLLECTORS LEADERBOARD",
-                color=0x1f8b4c,  # Professional green
-            )
-            
-            # Add header with stats
-            embed.add_field(
-                name="📊 GLOBAL STATS",
-                value=f"**Top Players:** {len(top_10)}\n**Total Collected:** {total_collected}\n**Highest:** {max_count}",
-                inline=False
+                title="🏆  NBA LEADERBOARD",
+                color=0xF5A623,
             )
 
-            # Build leaderboard
-            leaderboard_text = ""
-            medals = ["🥇", "🥈", "🥉"]
-            
-            for idx, (player, count) in enumerate(top_10, 1):
-                try:
-                    user = await self.bot.fetch_user(player.discord_id)
-                    name = user.name
-                except discord.NotFound:
-                    name = "Unknown User"
-                
-                # Determine medal for top 3
-                medal = medals[idx - 1] if idx <= 3 else f"#{idx}"
-                
-                leaderboard_text += f"{medal} {name} · **{count}**\n"
-            
-            embed.add_field(
-                name="🏅 RANKINGS",
-                value=leaderboard_text,
-                inline=False
-            )
-            
-            embed.set_footer(text="Global rankings • Updated in real-time")
-            embed.set_thumbnail(url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+            if entries:
+                desc = "```\n"
+                desc += f" {'#':<4} {'Player':<20} {'Cards':>6}\n"
+                desc += f" {'━' * 33}\n"
+                for idx, dname, count in entries:
+                    medal = medals.get(idx, "")
+                    rank_str = f" {medal}" if medal else f" {idx:<3}"
+                    desc += f"{rank_str}  {dname:<20} {count:>6,}\n"
+                desc += "```"
+                embed.description = desc
+
+            embed.set_footer(text=f"Top {len(entries)} collectors • Global rankings")
 
             await interaction.followup.send(embed=embed)
 
