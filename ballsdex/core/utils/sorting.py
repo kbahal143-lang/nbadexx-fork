@@ -29,6 +29,7 @@ class SortingChoices(enum.Enum):
     # total_stats = "total_stats"
     duplicates = "duplicates"
     catch_time = "catch_time"
+    quicksell_value = "quicksell"
 
 
 def sort_balls(
@@ -52,7 +53,13 @@ def sort_balls(
     QuerySet[BallInstance]
         The same queryset modified to apply the ordering. Await it to obtain the result.
     """
-    if sort == SortingChoices.catch_time:
+    if sort == SortingChoices.quicksell_value:
+        return queryset.annotate(
+            qs_val=RawSQL(
+                'COALESCE((SELECT cv.quicksell_value FROM coins_ballvalue cv WHERE cv.ball_id = "ballinstance"."ball_id"), 100)'
+            )
+        ).order_by("-qs_val")
+    elif sort == SortingChoices.catch_time:
         return queryset.filter(
             spawned_time__isnull=False
         ).annotate(
