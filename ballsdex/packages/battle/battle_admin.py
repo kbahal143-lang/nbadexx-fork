@@ -13,6 +13,7 @@ from tortoise.expressions import Q
 from ballsdex.core.utils.transformers import BallTransform
 
 from .models import MatchResult, PlayerPosition
+from .tournament import TournamentCog
 
 log = logging.getLogger("ballsdex.packages.battle.admin")
 
@@ -31,6 +32,50 @@ POSITION_WITH_NONE = POSITION_CHOICES + [
 
 class BattleAdmin(app_commands.Group):
     """Admin commands for the battle system."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tournament_cog: TournamentCog | None = None
+
+    def _get_tournament_cog(self, bot) -> TournamentCog:
+        if self._tournament_cog is None:
+            self._tournament_cog = TournamentCog(bot)
+        return self._tournament_cog
+
+    @app_commands.command(name="tournament")
+    @app_commands.describe(
+        action="Start or cancel a tournament",
+        min_players="Minimum players needed (default: 4)",
+        max_players="Maximum players allowed (default: 32)",
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Start", value="start"),
+        app_commands.Choice(name="Cancel", value="cancel"),
+    ])
+    async def tournament(
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        min_players: int = 4,
+        max_players: int = 32,
+    ):
+        """Start or cancel a tournament in this channel."""
+        await interaction.response.defer()
+        tcog = self._get_tournament_cog(interaction.client)
+
+        if action.value == "start":
+            if min_players < 2:
+                await interaction.followup.send("❌ Minimum players must be at least 2.", ephemeral=True)
+                return
+            if max_players < min_players:
+                await interaction.followup.send("❌ Max players can't be less than min players.", ephemeral=True)
+                return
+            if max_players > 64:
+                await interaction.followup.send("❌ Max players can't exceed 64.", ephemeral=True)
+                return
+            await tcog.start_tournament(interaction, min_players, max_players)
+        elif action.value == "cancel":
+            await tcog.cancel_tournament(interaction)
 
     @app_commands.command(name="setposition")
     @app_commands.describe(

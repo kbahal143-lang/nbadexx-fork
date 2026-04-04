@@ -28,6 +28,7 @@ class SortingChoices(enum.Enum):
     stats_bonus = "stats"
     # total_stats = "total_stats"
     duplicates = "duplicates"
+    catch_time = "catch_time"
 
 
 def sort_balls(
@@ -51,7 +52,15 @@ def sort_balls(
     QuerySet[BallInstance]
         The same queryset modified to apply the ordering. Await it to obtain the result.
     """
-    if sort == SortingChoices.duplicates:
+    if sort == SortingChoices.catch_time:
+        return queryset.filter(
+            spawned_time__isnull=False
+        ).annotate(
+            catch_time_val=RawSQL(
+                "EXTRACT(EPOCH FROM (catch_date - spawned_time))"
+            )
+        ).order_by("catch_time_val")
+    elif sort == SortingChoices.duplicates:
         return queryset.annotate(count=RawSQL("COUNT(*) OVER (PARTITION BY ball_id)")).order_by(
             "-count"
         )

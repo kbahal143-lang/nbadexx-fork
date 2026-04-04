@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from tortoise.exceptions import DoesNotExist
+from tortoise.expressions import Q
 
 from ballsdex.core.models import Ball, BallInstance, Player
 from ballsdex.core.utils.transformers import BallInstanceTransform
@@ -154,7 +155,15 @@ class TeamCog(commands.GroupCog, group_name="team"):
             )
             return
 
-        # 5. Card must not already be on this team (same slot or any other slot)
+        # 5. Card must not be locked elsewhere (match stake, bet, etc.)
+        if not inst.tradeable:
+            await interaction.followup.send(
+                f"❌ **{ball.country}** is currently locked (staked in a match or bet).",
+                ephemeral=True,
+            )
+            return
+
+        # 6. Card must not already be on this team (same slot or any other slot)
         team, _ = await Team.get_or_create(player=player)
         for check_pos in ("PG", "SG", "SF", "PF", "C"):
             existing_id = team.get_slot_id(check_pos)
@@ -166,7 +175,6 @@ class TeamCog(commands.GroupCog, group_name="team"):
                     ephemeral=True,
                 )
                 return
-            # Also block same player type (e.g. two Jokic cards)
             try:
                 existing_inst = await BallInstance.get(pk=existing_id).prefetch_related("ball")
                 if existing_inst.ball.pk == ball.pk:
@@ -179,9 +187,13 @@ class TeamCog(commands.GroupCog, group_name="team"):
             except Exception:
                 pass
 
-        # Assign
+        old_slot_id = team.get_slot_id(pos)
         team.set_slot_id(pos, inst.pk)
         await team.save()
+
+        if old_slot_id:
+            await BallInstance.filter(pk=old_slot_id).update(tradeable=True)
+        await BallInstance.filter(pk=inst.pk).update(tradeable=False)
 
         star = "⭐" * max(1, round(ball.rarity * 5))
         await interaction.followup.send(
@@ -216,7 +228,8 @@ class TeamCog(commands.GroupCog, group_name="team"):
             return
 
         pos = position.value
-        if not team.get_slot_id(pos):
+        old_slot_id = team.get_slot_id(pos)
+        if not old_slot_id:
             await interaction.followup.send(
                 f"The **{POSITION_LABELS[pos]}** slot is already empty.", ephemeral=True
             )
@@ -224,6 +237,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
 
         team.set_slot_id(pos, None)
         await team.save()
+        await BallInstance.filter(pk=old_slot_id).update(tradeable=True)
         await interaction.followup.send(
             f"✅ Cleared your **{POSITION_LABELS[pos]}** slot.", ephemeral=True
         )
@@ -247,9 +261,13 @@ class TeamCog(commands.GroupCog, group_name="team"):
             await interaction.followup.send("You don't have a team yet.", ephemeral=True)
             return
 
+        old_ids = [team.get_slot_id(pos) for pos in ("PG", "SG", "SF", "PF", "C")]
+        old_ids = [i for i in old_ids if i]
         for pos in ("PG", "SG", "SF", "PF", "C"):
             team.set_slot_id(pos, None)
         await team.save()
+        if old_ids:
+            await BallInstance.filter(pk__in=old_ids).update(tradeable=True)
         await interaction.followup.send("🗑️ Your lineup has been cleared.", ephemeral=True)
 
     # ─────────────────────────────────────────────────────────────────
@@ -265,14 +283,18 @@ class TeamCog(commands.GroupCog, group_name="team"):
             await interaction.followup.send("You don't have any cards yet.", ephemeral=True)
             return
 
-        # Fetch all owned, non-locked BallInstances
-        # Exclude tradeable=False cards — they are currently staked in a match or bet
+        team, _ = await Team.get_or_create(player=player)
+        current_lineup_ids = [
+            team.get_slot_id(p) for p in ("PG", "SG", "SF", "PF", "C")
+        ]
+        current_lineup_ids = [i for i in current_lineup_ids if i]
+
         all_insts = (
-            await BallInstance.filter(player=player, tradeable=True)
+            await BallInstance.filter(player=player)
+            .filter(Q(tradeable=True) | Q(pk__in=current_lineup_ids))
             .prefetch_related("ball")
         )
 
-        # Filter to base cards only
         base_insts = [i for i in all_insts if is_base_card(i.ball)]
         if not base_insts:
             await interaction.followup.send(
@@ -280,25 +302,18 @@ class TeamCog(commands.GroupCog, group_name="team"):
             )
             return
 
-        # Fetch/detect positions for all base cards
-        # Build: {inst_pk: PlayerPosition}
         pos_map: dict[int, PlayerPosition] = {}
         for inst in base_insts:
             pp = await get_or_detect_position(inst.ball)
             if pp:
                 pos_map[inst.pk] = pp
 
-        # Greedy assignment: for each position pick the highest-scoring available card
-        # that plays there (primary preferred over secondary).
-        # Both the card instance AND the player type (ball) must be unassigned
-        # so the same player can never appear at two positions.
-        team, _ = await Team.get_or_create(player=player)
-        assigned: set[int] = set()       # BallInstance PKs already assigned
-        assigned_balls: set[int] = set() # Ball (player type) PKs already assigned
+        assigned: set[int] = set()
+        assigned_balls: set[int] = set()
         result_lines: list[str] = []
+        new_lineup_ids: list[int] = []
 
         for pos in ("PG", "SG", "SF", "PF", "C"):
-            # Primary-position candidates first, then secondary
             primary_cands = [
                 i for i in base_insts
                 if i.pk in pos_map
@@ -324,11 +339,19 @@ class TeamCog(commands.GroupCog, group_name="team"):
             team.set_slot_id(pos, best.pk)
             assigned.add(best.pk)
             assigned_balls.add(best.ball.pk)
+            new_lineup_ids.append(best.pk)
             result_lines.append(
                 f"**{pos}** — {best.ball.country}  ⚔ {best.attack}  🛡 {best.health}"
             )
 
         await team.save()
+
+        removed_ids = [i for i in current_lineup_ids if i not in new_lineup_ids]
+        if removed_ids:
+            await BallInstance.filter(pk__in=removed_ids).update(tradeable=True)
+        if new_lineup_ids:
+            await BallInstance.filter(pk__in=new_lineup_ids).update(tradeable=False)
+
         summary = "\n".join(result_lines)
         await interaction.followup.send(
             f"🤖 **Auto-lineup set!**\n{summary}\n\nUse `/team info` to see your full lineup.",

@@ -138,6 +138,18 @@ class AuctionCog(commands.GroupCog, group_name="auction"):
                 value=f"<t:{end_ts}:R> (<t:{end_ts}:f>)",
                 inline=False,
             )
+
+            recent_bids = await AuctionBid.filter(auction=auction).order_by("-timestamp").limit(10)
+            if recent_bids:
+                lines = []
+                for i, bid in enumerate(recent_bids, 1):
+                    lines.append(f"`{i}.` <@{bid.bidder_discord_id}> — **{bid.amount:,}** coins")
+                embed.add_field(
+                    name="📜 Recent Bids",
+                    value="\n".join(lines),
+                    inline=False,
+                )
+
             embed.set_footer(text="Use /auction bid to place your bid!")
         elif ended and not cancelled:
             if auction.current_bidder_id:
@@ -388,7 +400,8 @@ class AuctionCog(commands.GroupCog, group_name="auction"):
                     if not prev_user:
                         prev_user = await self.bot.fetch_user(prev_bidder_id)
                     await prev_user.send(
-                        f"⚠️ You have been outbid on the auction for **{ball_name}**!\n"
+                        f"⚠️ You have been outbid by **{interaction.user.display_name}** "
+                        f"on the auction for **{ball_name}**!\n"
                         f"New highest bid: **{amount:,}** coins\n"
                         f"Your **{prev_bid_amount:,}** coins have been refunded."
                     )
