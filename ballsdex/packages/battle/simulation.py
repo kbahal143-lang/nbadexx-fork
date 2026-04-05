@@ -500,11 +500,17 @@ def _simulate_possession(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_player_sim(inst, position: str) -> PlayerSim:
+    offense = inst.attack
+    defense = inst.health
+    special = inst.specialcard
+    if special is not None:
+        offense += getattr(special, "battle_atk_bonus", 0)
+        defense += getattr(special, "battle_def_bonus", 0)
     return PlayerSim(
         name=inst.ball.country,
         position=position,
-        offense=inst.attack,
-        defense=inst.health,
+        offense=max(1, offense),
+        defense=max(1, defense),
         rarity=inst.ball.rarity,
     )
 
@@ -534,7 +540,7 @@ def _score_bar(team_a: TeamSim, team_b: TeamSim) -> str:
 def _build_lineup_field(team: TeamSim, color_emoji: str) -> str:
     lines = []
     for p in team.players():
-        lines.append(f"`{p.position}` **{p.name}** ({p.offense} OFF / {p.defense} DEF)")
+        lines.append(f"`{p.position}` **{p.name}** ({p.offense} OFF / {p.defense} HP)")
     return "\n".join(lines) if lines else "—"
 
 
@@ -665,13 +671,7 @@ async def run_match(
             pass
         await asyncio.sleep(3)
 
-    plays.append("**🏟️ LINEUP REVEAL**")
-    plays.append(f"🟠 **{team_a.owner}**")
-    for p in team_a.players():
-        plays.append(f"  `{p.position}` {p.name}")
-    plays.append(f"🔵 **{team_b.owner}**")
-    for p in team_b.players():
-        plays.append(f"  `{p.position}` {p.name}")
+    plays.append("**🏟️ LINEUP REVEAL — See lineups above!**")
     await push_update(1, "12:00", show_lineups=True)
 
     plays.clear()

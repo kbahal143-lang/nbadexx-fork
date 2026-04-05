@@ -125,6 +125,14 @@ class Special(models.Model):
         default=1.5,
         description="Multiplier applied to quicksell value for balls with this special",
     )
+    battle_atk_bonus = fields.IntField(
+        default=0,
+        description="Flat attack points added in battle for cards with this special (0 = no bonus)",
+    )
+    battle_def_bonus = fields.IntField(
+        default=0,
+        description="Flat defense points added in battle for cards with this special (0 = no bonus)",
+    )
 
     def __str__(self) -> str:
         return self.name
@@ -282,6 +290,16 @@ class BallInstance(models.Model):
         return self.countryball.health + bonus
 
     @property
+    def battle_attack(self) -> int:
+        """ATK stat as used in battle: includes both % bonus and special flat bonus."""
+        return self.attack + getattr(self.specialcard, "battle_atk_bonus", 0)
+
+    @property
+    def battle_health(self) -> int:
+        """HP stat as used in battle: includes both % bonus and special flat bonus."""
+        return self.health + getattr(self.specialcard, "battle_def_bonus", 0)
+
+    @property
     def special_card(self) -> str | None:
         if self.specialcard:
             return self.specialcard.background or self.countryball.collection_card
@@ -399,13 +417,27 @@ class BallInstance(models.Model):
 
         catch_time_msg = f" in {catch_time.total_seconds():.3f}s" if catch_time else ""
 
+        battle_atk_bonus = 0
+        battle_def_bonus = 0
+        special_bonus_line = ""
+        if self.specialcard and (
+            self.specialcard.battle_atk_bonus != 0
+            or self.specialcard.battle_def_bonus != 0
+        ):
+            battle_atk_bonus = self.specialcard.battle_atk_bonus
+            battle_def_bonus = self.specialcard.battle_def_bonus
+            special_bonus_line = (
+                f"\nSpecial Bonus — ATK: {battle_atk_bonus:+d} / HP: {battle_def_bonus:+d}"
+            )
+
         content = (
             f"ID: `#{self.pk:0X}`\n"
             f"Caught on {format_dt(self.catch_date)}{catch_time_msg}"
             f" ({format_dt(self.catch_date, style='R')}).\n"
             f"{trade_content}\n"
-            f"ATK: {self.attack} ({self.attack_bonus:+d}%)\n"
-            f"HP: {self.health} ({self.health_bonus:+d}%)"
+            f"ATK: {self.attack + battle_atk_bonus} ({self.attack_bonus:+d}%)\n"
+            f"HP: {self.health + battle_def_bonus} ({self.health_bonus:+d}%)"
+            f"{special_bonus_line}"
         )
 
         # draw image

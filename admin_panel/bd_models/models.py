@@ -178,6 +178,16 @@ class Special(models.Model):
         help_text="Multiplier applied to the quicksell value for balls with this special. "
                   "1.5 = 50% bonus (the default for all specials), 2.0 = double quicksell value.",
     )
+    battle_atk_bonus = models.IntegerField(
+        default=0,
+        help_text="Flat attack points added in battle for every card that has this special. "
+                  "0 = no bonus. Example: 20 means +20 ATK added on top of the card's normal stats.",
+    )
+    battle_def_bonus = models.IntegerField(
+        default=0,
+        help_text="Flat defense points added in battle for every card that has this special. "
+                  "0 = no bonus. Example: 20 means +20 DEF added on top of the card's normal stats.",
+    )
 
     def __str__(self) -> str:
         return self.name

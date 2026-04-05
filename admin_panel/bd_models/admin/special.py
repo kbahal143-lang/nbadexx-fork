@@ -35,6 +35,18 @@ class SpecialAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Battle Bonuses",
+            {
+                "fields": ["battle_atk_bonus", "battle_def_bonus"],
+                "description": (
+                    "Flat stat points added <b>on top of</b> a card's normal ATK/DEF when it is used in battle. "
+                    "Default is 0 (no bonus). "
+                    "Example: setting ATK bonus to 20 means every card with this special gets +20 ATK in battle. "
+                    "This bonus is shown on <b>/nba info</b> so players can see it on their card."
+                ),
+            },
+        ),
+        (
             "Time range",
             {
                 "fields": ["start_date", "end_date"],
@@ -52,8 +64,8 @@ class SpecialAdmin(admin.ModelAdmin):
         ),
     ]
 
-    list_display = ["name", "pk", "emoji_display", "catch_multiplier", "quicksell_multiplier", "start_date", "end_date", "rarity", "hidden"]
-    list_editable = ["hidden", "rarity", "catch_multiplier", "quicksell_multiplier"]
+    list_display = ["name", "pk", "emoji_display", "catch_multiplier", "quicksell_multiplier", "battle_atk_bonus", "battle_def_bonus", "start_date", "end_date", "rarity", "hidden"]
+    list_editable = ["hidden", "rarity", "catch_multiplier", "quicksell_multiplier", "battle_atk_bonus", "battle_def_bonus"]
     list_filter = ["hidden", "tradeable"]
 
     search_fields = ["name", "catch_phrase", "pk"]

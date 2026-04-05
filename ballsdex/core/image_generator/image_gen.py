@@ -292,7 +292,7 @@ def draw_card(
 
     _draw_styled_text(
         image, (320, 1670),
-        str(ball_instance.health),
+        str(ball_instance.battle_health),
         stats_font,
         color=s("health", "color", "#ED7365"),
         gradient_end=s("health", "gradient_end", ""),
@@ -305,7 +305,7 @@ def draw_card(
 
     _draw_styled_text(
         image, (1120, 1670),
-        str(ball_instance.attack),
+        str(ball_instance.battle_attack),
         stats_font,
         color=s("attack", "color", "#FCC24C"),
         gradient_end=s("attack", "gradient_end", ""),

@@ -79,7 +79,7 @@ def _score_instance(inst: BallInstance, position: str) -> float:
         "C":  (0.35, 0.65),
     }
     ow, dw = pos_weights.get(position, (0.5, 0.5))
-    return inst.ball.rarity * 200 + inst.attack * ow + inst.health * dw
+    return inst.ball.rarity * 200 + inst.battle_attack * ow + inst.battle_health * dw
 
 
 @app_commands.guild_only()
@@ -198,7 +198,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
         star = "⭐" * max(1, round(ball.rarity * 5))
         await interaction.followup.send(
             f"✅ **{ball.country}** [{pp.display()}] added to your **{POSITION_LABELS[pos]}** slot!\n"
-            f"{star}  ⚔ {inst.attack}  🛡 {inst.health}",
+            f"{star}  ⚔ {inst.battle_attack}  🛡 {inst.battle_health}",
             ephemeral=True,
         )
 
@@ -341,7 +341,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
             assigned_balls.add(best.ball.pk)
             new_lineup_ids.append(best.pk)
             result_lines.append(
-                f"**{pos}** — {best.ball.country}  ⚔ {best.attack}  🛡 {best.health}"
+                f"**{pos}** — {best.ball.country}  ⚔ {best.battle_attack}  🛡 {best.battle_health}"
             )
 
         await team.save()
@@ -390,17 +390,19 @@ class TeamCog(commands.GroupCog, group_name="team"):
             slot_id = team.get_slot_id(pos)
             if slot_id:
                 try:
-                    inst = await BallInstance.get(pk=slot_id).prefetch_related("ball")
+                    inst = await BallInstance.get(pk=slot_id).prefetch_related("ball", "special")
                     if inst.player_id != player.pk:
                         lines.append(f"**{pos}** · *(card no longer owned)*")
                     else:
                         stars = "⭐" * max(1, round(inst.ball.rarity * 5))
+                        spec_emoji = inst.special_emoji(interaction.client)
+                        spec_name = f" ({inst.specialcard.name})" if inst.specialcard else ""
                         lines.append(
-                            f"**{pos}** · {inst.ball.country}  {stars}\n"
-                            f"  ⚔ {inst.attack}  🛡 {inst.health}"
+                            f"**{pos}** · {spec_emoji}{inst.ball.country}{spec_name}  {stars}\n"
+                            f"  ⚔ {inst.battle_attack}  🛡 {inst.battle_health}"
                         )
-                        total_atk += inst.attack
-                        total_hp += inst.health
+                        total_atk += inst.battle_attack
+                        total_hp += inst.battle_health
                 except DoesNotExist:
                     lines.append(f"**{pos}** · *(card no longer owned)*")
             else:

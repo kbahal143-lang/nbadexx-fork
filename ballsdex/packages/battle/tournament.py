@@ -35,8 +35,8 @@ def _team_overall(slots: dict) -> float:
     count = 0
     for pos, inst in slots.items():
         if inst:
-            total_off += inst.attack
-            total_def += inst.health
+            total_off += inst.battle_attack
+            total_def += inst.battle_health
             count += 1
     if count == 0:
         return 0.0
@@ -44,8 +44,8 @@ def _team_overall(slots: dict) -> float:
 
 
 def _team_total_stats(slots: dict) -> tuple[int, int]:
-    total_off = sum(inst.attack for inst in slots.values() if inst)
-    total_def = sum(inst.health for inst in slots.values() if inst)
+    total_off = sum(inst.battle_attack for inst in slots.values() if inst)
+    total_def = sum(inst.battle_health for inst in slots.values() if inst)
     return total_off, total_def
 
 
@@ -446,7 +446,7 @@ class TournamentCog:
             ovr = _team_overall(p.slots)
             lines.append(
                 f"`{p.seed:>2}.` **{p.display_name}** — "
-                f"`{ovr:.0f} OVR` · `{off} OFF` · `{defe} DEF`"
+                f"`{ovr:.0f} OVR` · `{off} OFF` · `{defe} HP`"
             )
 
         embed.add_field(
@@ -559,7 +559,7 @@ class TournamentCog:
             value=(
                 f"```\n"
                 f"OFF  {off_a:>5}\n"
-                f"DEF  {def_a:>5}\n"
+                f"HP   {def_a:>5}\n"
                 f"```"
             ),
             inline=True,
@@ -574,7 +574,7 @@ class TournamentCog:
             value=(
                 f"```\n"
                 f"OFF  {off_b:>5}\n"
-                f"DEF  {def_b:>5}\n"
+                f"HP   {def_b:>5}\n"
                 f"```"
             ),
             inline=True,
@@ -753,7 +753,7 @@ class TournamentCog:
                     f"```\n"
                     f"OVR  {ovr:.0f}\n"
                     f"OFF  {off}\n"
-                    f"DEF  {defe}\n"
+                    f"HP   {defe}\n"
                     f"```"
                 ),
                 inline=False,
