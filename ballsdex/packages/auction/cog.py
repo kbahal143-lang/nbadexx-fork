@@ -139,7 +139,7 @@ class AuctionCog(commands.GroupCog, group_name="auction"):
                 inline=False,
             )
 
-            recent_bids = await AuctionBid.filter(auction=auction).order_by("-timestamp").limit(10)
+            recent_bids = await AuctionBid.filter(auction=auction).order_by("-bid_at").limit(10)
             if recent_bids:
                 lines = []
                 for i, bid in enumerate(recent_bids, 1):
