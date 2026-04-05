@@ -700,75 +700,56 @@ class MatchCog(commands.GroupCog, group_name="match"):
         stake = session.stakes[interaction.user.id]
         msgs: list[str] = []
 
-        # Track whether we locked a card in THIS call so we can roll it back if a later
-        # check (coins / packs) fails — prevents silent partial stakes.
-        card_locked_this_call: int | None = None
+        # ── Validate everything FIRST before any DB mutations ────────────────
+        # This prevents partial-write bugs where e.g. coins are deducted but a
+        # later pack check fails, leaving coins silently in escrow.
 
-        async def _rollback_card():
-            """Undo a card lock committed earlier in this same command invocation."""
-            if card_locked_this_call is not None:
-                stake.ball_ids.remove(card_locked_this_call)
-                await BallInstance.filter(pk=card_locked_this_call).update(tradeable=True)
-
-        # ── Card stake
+        card_inst = None
         if card is not None:
-            inst = await BallInstance.get(pk=card.pk).prefetch_related("ball")
-            if inst.player_id != player.pk:
+            card_inst = await BallInstance.get(pk=card.pk).prefetch_related("ball")
+            if card_inst.player_id != player.pk:
                 await interaction.followup.send("❌ You don't own that card.", ephemeral=True)
                 return
-            if inst.pk in stake.ball_ids:
+            if card_inst.pk in stake.ball_ids:
                 await interaction.followup.send(
-                    f"❌ You already staked **{inst.ball.country}**.", ephemeral=True
+                    f"❌ You already staked **{card_inst.ball.country}**.", ephemeral=True
                 )
                 return
-            await inst.refresh_from_db()
-            if not inst.tradeable:
+            await card_inst.refresh_from_db()
+            if not card_inst.tradeable:
                 await interaction.followup.send(
-                    f"❌ **{inst.ball.country}** is not tradeable and cannot be staked.",
+                    f"❌ **{card_inst.ball.country}** is not tradeable and cannot be staked.",
                     ephemeral=True,
                 )
                 return
-            if await inst.is_locked():
+            if await card_inst.is_locked():
                 await interaction.followup.send(
-                    f"❌ **{inst.ball.country}** is locked by another trade or bet.",
+                    f"❌ **{card_inst.ball.country}** is locked by another trade or bet.",
                     ephemeral=True,
                 )
                 return
-            stake.ball_ids.append(inst.pk)
-            await BallInstance.filter(pk=inst.pk).update(tradeable=False)
-            card_locked_this_call = inst.pk
-            msgs.append(f"🎴 **{inst.ball.country}** added to your stakes.")
 
-        # ── Coin stake
+        money = None
         if coins is not None:
             if coins <= 0:
-                await _rollback_card()
                 await interaction.followup.send("❌ Coins must be positive.", ephemeral=True)
                 return
             money, _ = await PlayerMoney.get_or_create(player=player)
             if money.coins < coins:
-                await _rollback_card()
                 await interaction.followup.send(
                     f"❌ Not enough coins. You have **{money.coins:,}** coins.",
                     ephemeral=True,
                 )
                 return
-            # Deduct immediately — returned on cancel, transferred to winner on match end
-            money.coins -= coins
-            await money.save()
-            stake.coins += coins
-            msgs.append(f"💰 **{coins:,}** coins added to your stakes and held in escrow.")
 
-        # ── Pack stake
+        pp = None
         if pack is not None:
             if pack_amount <= 0:
-                await _rollback_card()
                 await interaction.followup.send("❌ Pack amount must be at least 1.", ephemeral=True)
                 return
             pp = await PlayerPack.get_or_none(player=player, pack=pack)
             owned_qty = pp.quantity if pp else 0
             if owned_qty < pack_amount:
-                await _rollback_card()
                 already_staked = stake.packs.get(pack.pk, 0)
                 await interaction.followup.send(
                     f"❌ You only have **{owned_qty}** of that pack available"
@@ -776,20 +757,35 @@ class MatchCog(commands.GroupCog, group_name="match"):
                     ephemeral=True,
                 )
                 return
-            # Deduct immediately — returned on cancel, transferred to winner on match end
-            pp.quantity -= pack_amount
-            if pp.quantity <= 0:
-                await pp.delete()
-            else:
-                await pp.save()
-            stake.packs[pack.pk] = stake.packs.get(pack.pk, 0) + pack_amount
-            msgs.append(f"📦 **{pack.name}** ×{pack_amount} added to your stakes and held in escrow.")
 
-        if not msgs:
+        if card_inst is None and coins is None and pack is None:
             await interaction.followup.send(
                 "Provide at least one of: `card`, `coins`, `pack`.", ephemeral=True
             )
             return
+
+        # ── All checks passed — apply mutations atomically ───────────────────
+
+        if card_inst is not None:
+            stake.ball_ids.append(card_inst.pk)
+            await BallInstance.filter(pk=card_inst.pk).update(tradeable=False)
+            msgs.append(f"🎴 **{card_inst.ball.country}** added to your stakes.")
+
+        if coins is not None:
+            money.coins -= coins
+            await money.save()
+            stake.coins += coins
+            msgs.append(f"💰 **{coins:,}** coins added to your stakes and held in escrow.")
+
+        if pack is not None:
+            if pp is not None:
+                pp.quantity -= pack_amount
+                if pp.quantity <= 0:
+                    await pp.delete()
+                else:
+                    await pp.save()
+            stake.packs[pack.pk] = stake.packs.get(pack.pk, 0) + pack_amount
+            msgs.append(f"📦 **{pack.name}** ×{pack_amount} added to your stakes and held in escrow.")
 
         await self.update_stake_embed(session)
         await interaction.followup.send("\n".join(msgs), ephemeral=True)
