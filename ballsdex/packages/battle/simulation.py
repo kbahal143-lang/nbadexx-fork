@@ -356,7 +356,7 @@ def _simulate_possession(
     roll = random.random()
 
     diff = (defender.defense - attacker.offense)
-    stl_chance = 0.08 * (1 + diff / 200)
+    stl_chance = 0.08 * (1 + diff / 120)
     stl_chance = max(0.02, min(0.25, stl_chance))
     to_chance = 0.05 + max(0.0, diff / 500)
     to_chance = min(0.12, to_chance)
@@ -420,7 +420,7 @@ def _simulate_possession(
     def_rating = defender.defense / 300
     base_make = POS_BASE_MAKE[shot_type]
     stat_diff = off_rating - def_rating
-    make_prob = base_make + stat_diff * 0.45
+    make_prob = base_make + stat_diff * 1.5
     make_prob = max(0.08, min(0.92, make_prob))
 
     attacker.fga += 1

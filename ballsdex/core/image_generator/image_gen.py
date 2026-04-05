@@ -30,14 +30,16 @@ credits_font = ImageFont.truetype(str(SOURCES_PATH / "arial.ttf"), 40)
 credits_color_cache: dict = {}
 
 _ball_styles: dict[int, dict] = {}
+_special_styles: dict[int, dict] = {}
 
 
 async def refresh_card_style() -> None:
-    global _ball_styles
+    global _ball_styles, _special_styles
     try:
         from tortoise import Tortoise
         conn = Tortoise.get_connection("default")
-        rows = await conn.execute_query_dict(
+
+        ball_rows = await conn.execute_query_dict(
             """
             SELECT cs.*, csb.ball_id
             FROM card_style_cardstyle cs
@@ -45,14 +47,31 @@ async def refresh_card_style() -> None:
             ORDER BY cs.updated_at DESC
             """
         )
-        mapping: dict[int, dict] = {}
-        for row in rows:
+        ball_mapping: dict[int, dict] = {}
+        for row in ball_rows:
             ball_id = row["ball_id"]
-            if ball_id not in mapping:
-                mapping[ball_id] = row
-        _ball_styles = mapping
+            if ball_id not in ball_mapping:
+                ball_mapping[ball_id] = row
+        _ball_styles = ball_mapping
+
+        special_rows = await conn.execute_query_dict(
+            """
+            SELECT *
+            FROM card_style_cardstyle
+            WHERE special_id IS NOT NULL
+            ORDER BY updated_at DESC
+            """
+        )
+        special_mapping: dict[int, dict] = {}
+        for row in special_rows:
+            sid = row["special_id"]
+            if sid not in special_mapping:
+                special_mapping[sid] = row
+        _special_styles = special_mapping
+
     except Exception:
         _ball_styles = {}
+        _special_styles = {}
 
 
 def _hex_to_rgba(hex_str: str, alpha: int = 255) -> tuple:
@@ -218,6 +237,8 @@ def draw_card(
     )
 
     ball_style = _ball_styles.get(ball.pk)
+    if ball_style is None and ball_instance.special_id:
+        ball_style = _special_styles.get(ball_instance.special_id)
 
     def s(prefix: str, attr: str, default: Any) -> Any:
         return _gs(ball_style, prefix, attr, default)

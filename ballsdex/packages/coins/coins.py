@@ -83,7 +83,7 @@ class BulkSellSelector(Pages):
             ballvalue = await BallValue.get_or_none(ball=ball.countryball)
             value = ballvalue.quicksell_value if ballvalue else 100
             if ball.specialcard:
-                value = int(value * 1.5)
+                value = int(value * ball.specialcard.quicksell_multiplier)
             options.append(
                 discord.SelectOption(
                     label=f"{special}#{ball.pk:0X} {ball.countryball.country}",
@@ -356,8 +356,8 @@ class Coins(commands.GroupCog, group_name="coins"):
             
             bonus_multiplier = 1.0
             if countryball.specialcard:
-                bonus_multiplier = 1.5
-            
+                bonus_multiplier = countryball.specialcard.quicksell_multiplier
+
             final_value = int(sell_value * bonus_multiplier)
             
             attack = "{:+}".format(countryball.attack_bonus)
@@ -456,57 +456,51 @@ class Coins(commands.GroupCog, group_name="coins"):
         if interaction.user.id in _active_operations:
             await interaction.response.send_message("You have another operation in progress!", ephemeral=True)
             return
-        
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
-        player, _ = await Player.get_or_create(discord_id=interaction.user.id)
-        money, _ = await PlayerMoney.get_or_create(player=player)
-        
-        query = BallInstance.filter(
-            player=player, favorite=False, tradeable=True, deleted=False, locked__isnull=True
-        )
-        
-        if countryball:
-            query = query.filter(ball=countryball)
-        if special:
-            query = query.filter(special=special)
-        if season:
-            season_ball_ids = await get_season_ball_ids(season.pk)
-            query = query.filter(ball__id__in=season_ball_ids)
-        if sort:
-            query = sort_balls(sort, query)
-        if filter:
-            query = filter_balls(filter, query, interaction.guild_id)
-        
-        balls = cast(list[int], await query.values_list("id", flat=True))
-        
-        if not balls:
-            await interaction.followup.send(
-                f"No {settings.plural_collectible_name} found.", ephemeral=True
-            )
-            return
-        
-        view = BulkSellSelector(interaction, balls)
-        await view.start(
-            content=f"Select the {settings.plural_collectible_name} you want to sell, "
-            "note that the display will wipe on pagination however "
-            f"the selected {settings.plural_collectible_name} will remain."
-        )
-        
-        await view.wait()
-        
-        if not view.confirmed or not view.balls_selected:
-            return
-        
-        if interaction.user.id in _active_operations:
-            await interaction.edit_original_response(
-                content="You have another operation in progress!", embed=None, view=None
-            )
-            return
-        
+
         _active_operations.add(interaction.user.id)
         locked_balls: list[BallInstance] = []
         try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
+            player, _ = await Player.get_or_create(discord_id=interaction.user.id)
+            money, _ = await PlayerMoney.get_or_create(player=player)
+
+            query = BallInstance.filter(
+                player=player, favorite=False, tradeable=True, deleted=False, locked__isnull=True
+            )
+
+            if countryball:
+                query = query.filter(ball=countryball)
+            if special:
+                query = query.filter(special=special)
+            if season:
+                season_ball_ids = await get_season_ball_ids(season.pk)
+                query = query.filter(ball__id__in=season_ball_ids)
+            if sort:
+                query = sort_balls(sort, query)
+            if filter:
+                query = filter_balls(filter, query, interaction.guild_id)
+
+            balls = cast(list[int], await query.values_list("id", flat=True))
+
+            if not balls:
+                await interaction.followup.send(
+                    f"No {settings.plural_collectible_name} found.", ephemeral=True
+                )
+                return
+
+            view = BulkSellSelector(interaction, balls)
+            await view.start(
+                content=f"Select the {settings.plural_collectible_name} you want to sell, "
+                "note that the display will wipe on pagination however "
+                f"the selected {settings.plural_collectible_name} will remain."
+            )
+
+            await view.wait()
+
+            if not view.confirmed or not view.balls_selected:
+                return
+
             valid_balls = await BallInstance.filter(
                 id__in=list(view.balls_selected),
                 player=player,
@@ -534,9 +528,10 @@ class Coins(commands.GroupCog, group_name="coins"):
             
             total_value = 0
             for inst in locked_balls:
-                value = inst.countryball.ballvalue.quicksell_value
+                bv = await BallValue.get_or_none(ball=inst.countryball)
+                value = bv.quicksell_value if bv else 100
                 if inst.specialcard:
-                    value = int(value * 1.5)
+                    value = int(value * inst.specialcard.quicksell_multiplier)
                 total_value += value
             
             confirm_embed = discord.Embed(
@@ -573,9 +568,10 @@ class Coins(commands.GroupCog, group_name="coins"):
                 for inst in locked_balls:
                     await inst.refresh_from_db()
                     if inst.player_id == player.pk and not inst.deleted:
-                        value = inst.countryball.ballvalue.quicksell_value
+                        bv = await BallValue.get_or_none(ball=inst.countryball)
+                        value = bv.quicksell_value if bv else 100
                         if inst.specialcard:
-                            value = int(value * 1.5)
+                            value = int(value * inst.specialcard.quicksell_multiplier)
                         actual_value += value
                         inst.deleted = True
                         await inst.save(update_fields=["deleted"])

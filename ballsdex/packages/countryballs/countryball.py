@@ -106,6 +106,10 @@ class CountryballNamePrompt(Modal, title=f"Catch this {settings.collectible_name
             from ballsdex.packages.coins.models import BallValue, PlayerMoney
             bv = await BallValue.get_or_none(ball=self.view.model)
             catch_coins = bv.catch_value if bv else 100
+            special = ball.specialcard
+            if special and special.catch_multiplier != 1.0:
+                catch_coins = int(catch_coins * special.catch_multiplier)
+            catch_coins = max(0, catch_coins)
             if catch_coins > 0:
                 money, _ = await PlayerMoney.get_or_create(player=player)
                 money.coins += catch_coins
@@ -446,8 +450,11 @@ class BallSpawnView(View):
         text = ""
         if ball.specialcard and ball.specialcard.catch_phrase:
             text += f"*{ball.specialcard.catch_phrase}*\n"
-        if self.ballinstance and catcher_id and catcher_id == self.og_id:
-            text += f"Caught your own drop? What a cheap thing to do.\n"
+        if self.ballinstance:
+            if catcher_id and catcher_id == self.og_id:
+                text += f"Caught your own drop? What a cheap thing to do.\n"
+            else:
+                text += f"Dropped by <@{self.og_id}>\n"
         if new_ball:
             text += (
                 f"\nThis is a **new {settings.collectible_name}** "

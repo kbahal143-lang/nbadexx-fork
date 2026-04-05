@@ -304,12 +304,17 @@ class AuctionAdmin(app_commands.Group):
                 )
                 return
 
-            if auction.current_bidder_id:
-                prev_player = await Player.get(discord_id=auction.current_bidder_id)
-                prev_money, _ = await PlayerMoney.get_or_create(player=prev_player)
-                prev_money.coins += auction.current_bid
-                await prev_money.save(update_fields=["coins"])
+            async with in_transaction():
+                if auction.current_bidder_id:
+                    prev_player = await Player.get(discord_id=auction.current_bidder_id)
+                    prev_money, _ = await PlayerMoney.get_or_create(player=prev_player)
+                    prev_money.coins += auction.current_bid
+                    await prev_money.save(update_fields=["coins"])
 
+                auction.status = "cancelled"
+                await auction.save(update_fields=["status"])
+
+            if auction.current_bidder_id:
                 try:
                     user = interaction.client.get_user(auction.current_bidder_id)
                     if not user:
@@ -322,9 +327,6 @@ class AuctionAdmin(app_commands.Group):
                     )
                 except (discord.Forbidden, discord.HTTPException):
                     pass
-
-            auction.status = "cancelled"
-            await auction.save(update_fields=["status"])
 
             await cog._update_embed(auction, cancelled=True)
 

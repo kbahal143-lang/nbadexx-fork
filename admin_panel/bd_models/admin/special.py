@@ -22,6 +22,19 @@ class SpecialAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Coin Multipliers",
+            {
+                "fields": ["catch_multiplier", "quicksell_multiplier"],
+                "description": (
+                    "Control how much this special is worth. "
+                    "<b>Catch multiplier</b> scales the coins awarded when catching a ball with this special "
+                    "(1.0 = normal, 2.0 = double). "
+                    "<b>Quicksell multiplier</b> scales the sell value "
+                    "(1.5 = default +50% bonus, 2.0 = double)."
+                ),
+            },
+        ),
+        (
             "Time range",
             {
                 "fields": ["start_date", "end_date"],
@@ -39,8 +52,8 @@ class SpecialAdmin(admin.ModelAdmin):
         ),
     ]
 
-    list_display = ["name", "pk", "emoji_display", "start_date", "end_date", "rarity", "hidden"]
-    list_editable = ["hidden", "rarity"]
+    list_display = ["name", "pk", "emoji_display", "catch_multiplier", "quicksell_multiplier", "start_date", "end_date", "rarity", "hidden"]
+    list_editable = ["hidden", "rarity", "catch_multiplier", "quicksell_multiplier"]
     list_filter = ["hidden", "tradeable"]
 
     search_fields = ["name", "catch_phrase", "pk"]

@@ -168,6 +168,16 @@ class Special(models.Model):
     credits = models.CharField(
         max_length=64, help_text="Author of the special event artwork", null=True
     )
+    catch_multiplier = models.FloatField(
+        default=1.0,
+        help_text="Multiplier applied to catch coins when someone catches a ball with this special. "
+                  "1.0 = normal, 2.0 = double coins on catch.",
+    )
+    quicksell_multiplier = models.FloatField(
+        default=1.5,
+        help_text="Multiplier applied to the quicksell value for balls with this special. "
+                  "1.5 = 50% bonus (the default for all specials), 2.0 = double quicksell value.",
+    )
 
     def __str__(self) -> str:
         return self.name

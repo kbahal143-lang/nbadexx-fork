@@ -172,6 +172,10 @@ class TournamentJoinView(discord.ui.View):
 
         await self.cog._update_join_embed(self.tournament)
 
+        if len(self.tournament.players) >= self.tournament.max_players:
+            self.tournament.status = "starting"
+            self.stop()
+
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.grey, emoji="🚪")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.tournament.status != "joining":
@@ -348,48 +352,66 @@ class TournamentCog:
 
         channel = self.bot.get_channel(tournament.channel_id)
         if not channel:
-            return
-
-        if len(tournament.players) < tournament.min_players:
+            log.error(f"Tournament: channel {tournament.channel_id} not found, aborting.")
             tournament.status = "done"
             self.active_tournament = None
-            embed = discord.Embed(
-                title="🏆  NBAdex Tournament",
-                description=(
-                    f"**Registration closed** — not enough players.\n"
-                    f"Only **{len(tournament.players)}/{tournament.min_players}** joined."
-                ),
-                color=EMBED_COLOR_RED,
-            )
-            await channel.send(embed=embed)
             return
 
-        await self._load_all_slots(tournament)
+        try:
+            if len(tournament.players) < tournament.min_players:
+                embed = discord.Embed(
+                    title="🏆  NBAdex Tournament",
+                    description=(
+                        f"**Registration closed** — not enough players.\n"
+                        f"Only **{len(tournament.players)}/{tournament.min_players}** joined."
+                    ),
+                    color=EMBED_COLOR_RED,
+                )
+                await channel.send(embed=embed)
+                return
 
-        for tp in tournament.players:
-            if not tp.eliminated:
-                filled = sum(1 for v in tp.slots.values() if v is not None)
-                if filled < 5:
-                    tp.eliminated = True
-                    log.info(
-                        f"Tournament: disqualified {tp.display_name} "
-                        f"(only {filled}/5 valid slots after load)"
-                    )
+            await self._load_all_slots(tournament)
 
-        active = [p for p in tournament.players if not p.eliminated]
-        active.sort(key=lambda p: _team_overall(p.slots), reverse=True)
-        for i, p in enumerate(active):
-            p.seed = i + 1
-        tournament.players = active
+            for tp in tournament.players:
+                if not tp.eliminated:
+                    filled = sum(1 for v in tp.slots.values() if v is not None)
+                    if filled < 5:
+                        tp.eliminated = True
+                        log.info(
+                            f"Tournament: disqualified {tp.display_name} "
+                            f"(only {filled}/5 valid slots after load)"
+                        )
 
-        self._generate_bracket(tournament)
+            active = [p for p in tournament.players if not p.eliminated]
+            active.sort(key=lambda p: _team_overall(p.slots), reverse=True)
+            for i, p in enumerate(active):
+                p.seed = i + 1
+            tournament.players = active
 
-        await self._show_seedings(tournament, channel)
-        await asyncio.sleep(4)
-        await self._show_bracket(tournament, channel)
-        await asyncio.sleep(3)
+            self._generate_bracket(tournament)
 
-        await self._run_tournament(tournament, channel)
+            await self._show_seedings(tournament, channel)
+            await asyncio.sleep(4)
+            await self._show_bracket(tournament, channel)
+            await asyncio.sleep(3)
+
+            await self._run_tournament(tournament, channel)
+
+        except Exception:
+            log.exception("Tournament setup/run failed; cleaning up.")
+            try:
+                error_embed = discord.Embed(
+                    title="⚠️  Tournament Error",
+                    description="An unexpected error occurred. The tournament has been cancelled.",
+                    color=EMBED_COLOR_RED,
+                )
+                await channel.send(embed=error_embed)
+            except Exception:
+                pass
+        finally:
+            if tournament.status not in ("done", "cancelled"):
+                tournament.status = "done"
+            self.active_tournament = None
 
     async def _load_all_slots(self, tournament: Tournament):
         for tp in tournament.players:

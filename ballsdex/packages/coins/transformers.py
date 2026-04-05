@@ -9,9 +9,11 @@ from .models import Pack, PlayerPack
 class PackTransformer(app_commands.Transformer):
     async def transform(self, interaction: discord.Interaction, value: str) -> Pack:
         try:
-            pack = await Pack.get(id=int(value))
+            pack = await Pack.get_or_none(id=int(value), enabled=True)
         except Exception:
-            pack = await Pack.filter(name__icontains=value).first()
+            pack = None
+        if not pack:
+            pack = await Pack.filter(name__icontains=value, enabled=True).first()
         if not pack:
             raise app_commands.TransformerError(value, type(value), self)
         return pack
@@ -38,10 +40,14 @@ class OwnedPackTransformer(app_commands.Transformer):
     async def transform(self, interaction: discord.Interaction, value: str) -> PlayerPack:
         player, _ = await Player.get_or_create(discord_id=interaction.user.id)
         try:
-            player_pack = await PlayerPack.get(id=int(value), player=player)
+            player_pack = await PlayerPack.get_or_none(
+                id=int(value), player=player, pack__enabled=True
+            )
         except Exception:
+            player_pack = None
+        if not player_pack:
             player_pack = await PlayerPack.filter(
-                player=player, pack__name__icontains=value, quantity__gt=0
+                player=player, pack__name__icontains=value, pack__enabled=True, quantity__gt=0
             ).first()
         if not player_pack or player_pack.quantity <= 0:
             raise app_commands.TransformerError(value, type(value), self)
