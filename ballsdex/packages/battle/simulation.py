@@ -39,6 +39,12 @@ class PlayerSim:
     ftm: int = 0
     fta: int = 0
 
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return self is other
+
     @property
     def overall(self) -> float:
         return self.rarity * 100
