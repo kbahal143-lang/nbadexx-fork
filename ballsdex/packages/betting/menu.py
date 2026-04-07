@@ -437,6 +437,11 @@ class BallsSelector(Pages):
     async def set_options(self, balls: AsyncIterator[BallInstance]):
         options: List[discord.SelectOption] = []
         async for ball in balls:
+            # Never show untradeable cards in the bet selector.
+            # Only check the BallInstance.tradeable field here — the related Ball model
+            # may not be prefetched in this iterator, so we avoid calling is_tradeable.
+            if not ball.tradeable:
+                continue
             emoji = self.bot.get_emoji(int(ball.countryball.emoji_id))
             favorite = f"{settings.favorited_collectible_emoji} " if ball.favorite else ""
             special = ball.special_emoji(self.bot, True)
@@ -524,6 +529,17 @@ class BallsSelector(Pages):
                     return
                 break
         
+        # Reject any untradeable cards that somehow slipped through.
+        # Use ball.tradeable directly — it's the field that is set to False for
+        # permanently untradeable cards and doesn't require additional FK prefetching.
+        untradeable = [b for b in self.balls_selected if not b.tradeable]
+        if untradeable:
+            names = ", ".join(f"**{b.countryball.country}**" for b in untradeable)
+            return await interaction.followup.send(
+                f"The following card(s) are untradeable and cannot be bet: {names}",
+                ephemeral=True,
+            )
+
         # Lock all selected NBAs before adding to proposal
         failed_lock = []
         locked_balls = []

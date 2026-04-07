@@ -183,6 +183,14 @@ class Bet(commands.GroupCog):
             )
             return
 
+        # Untradeable cards (collector cards, event rewards, etc.) cannot be bet
+        if not nba.tradeable:
+            await interaction.followup.send(
+                "This card is **untradeable** and cannot be used in a bet.",
+                ephemeral=True,
+            )
+            return
+
         # Check if already locked by another trade/bet
         if await nba.is_locked():
             await interaction.followup.send(
@@ -333,11 +341,12 @@ class Bet(commands.GroupCog):
         from ballsdex.packages.betting.menu import BallsSelector
         
         try:
-            # Only show NBAs that are not locked (not in any ongoing trade/bet)
+            # Only show tradeable, unlocked NBAs (untradeable cards can never be bet)
             query = BallInstance.filter(
                 player__discord_id=interaction.user.id,
                 locked__isnull=True,
                 deleted=False,
+                tradeable=True,
             )
             if nba:
                 query = query.filter(ball=nba)

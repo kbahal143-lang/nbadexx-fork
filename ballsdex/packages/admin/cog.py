@@ -19,6 +19,7 @@ from .logs import Logs as LogsGroup
 from .coins import CoinsAdmin as CoinsGroup, PacksAdmin as PacksGroup
 from ballsdex.packages.battle.battle_admin import BattleAdmin as BattleGroup
 from ballsdex.packages.auction.auction_admin import AuctionAdmin as AuctionGroup
+from ballsdex.packages.collector.collector_admin import CollectorAdmin as CollectorGroup
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -49,6 +50,7 @@ class Admin(commands.GroupCog):
         self.__cog_app_commands_group__.add_command(PacksGroup(name="packs"))
         self.__cog_app_commands_group__.add_command(BattleGroup(name="battle"))
         self.__cog_app_commands_group__.add_command(AuctionGroup(name="auction"))
+        self.__cog_app_commands_group__.add_command(CollectorGroup(name="collector"))
 
     @app_commands.command()
     @app_commands.checks.has_any_role(*settings.root_role_ids)
