@@ -79,7 +79,7 @@ def _score_instance(inst: BallInstance, position: str) -> float:
         "C":  (0.35, 0.65),
     }
     ow, dw = pos_weights.get(position, (0.5, 0.5))
-    return inst.ball.rarity * 200 + inst.battle_attack * ow + inst.battle_health * dw
+    return inst.battle_attack * ow + inst.battle_health * dw
 
 
 @app_commands.guild_only()
@@ -292,7 +292,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
         all_insts = (
             await BallInstance.filter(player=player)
             .filter(Q(tradeable=True) | Q(pk__in=current_lineup_ids))
-            .prefetch_related("ball")
+            .prefetch_related("ball", "special")
         )
 
         base_insts = [i for i in all_insts if is_base_card(i.ball)]
