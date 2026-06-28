@@ -210,6 +210,19 @@ class Ball(models.Model):
     collection_card = models.ImageField(
         max_length=200, help_text="Image used when displaying balls"
     )
+    card_overlay = models.ImageField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Optional image overlaid on top of the finished card (drawn last).",
+    )
+    card_full_override = models.ImageField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Optional full-card image that replaces the entire card output, "
+        "ignoring background, artwork, text, stats and every other element.",
+    )
     credits = models.CharField(max_length=64, help_text="Author of the collection artwork")
     capacity_name = models.CharField(max_length=64, help_text="Name of the countryball's capacity")
     capacity_description = models.CharField(
@@ -264,6 +277,18 @@ class Ball(models.Model):
     @admin.display(description="Current spawn asset")
     def spawn_image(self) -> SafeText:
         return image_display(str(self.wild_card))
+
+    @admin.display(description="Current overlay")
+    def overlay_image(self) -> SafeText:
+        if not self.card_overlay:
+            return mark_safe("<i>None</i>")
+        return image_display(str(self.card_overlay))
+
+    @admin.display(description="Current full-card override")
+    def full_override_image(self) -> SafeText:
+        if not self.card_full_override:
+            return mark_safe("<i>None</i>")
+        return image_display(str(self.card_full_override))
 
     def save(
         self,

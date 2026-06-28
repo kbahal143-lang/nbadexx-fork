@@ -31,6 +31,15 @@ log = logging.getLogger("ballsdex.packages.battle")
 # ──────────────────────────────────────────────────────────
 BATTLE_GUILD_ID = 1440962506796433519
 
+# Strip a leading season prefix like "2025-26 " or "2025-2026 " so season-tagged
+# cards (e.g. "2025-26 LeBron James") are still treated as base cards in battles.
+_SEASON_PREFIX_RE = re.compile(r"^\s*\d{4}-\d{2,4}\s+")
+
+
+def _strip_season_prefix(name: str) -> str:
+    return _SEASON_PREFIX_RE.sub("", name)
+
+
 # Exclude digits, parentheses and brackets — allows accented/unicode names like Jokić, Şengün
 _BASE_CARD_RE = re.compile(r"^[^\d\(\)\[\]]+$")
 
@@ -44,10 +53,13 @@ POSITION_CHOICES = [
 
 
 def is_base_card(ball: Ball) -> bool:
-    """Returns True if this is a simple, enabled player-name card."""
+    """Returns True if this is a simple, enabled player-name card.
+    A leading season prefix (e.g. "2025-26 ") is stripped before checking,
+    so season-tagged player cards still qualify."""
     if not ball.enabled:
         return False
-    return bool(_BASE_CARD_RE.match(ball.country))
+    cleaned = _strip_season_prefix(ball.country)
+    return bool(_BASE_CARD_RE.match(cleaned))
 
 
 async def get_or_detect_position(ball: Ball) -> PlayerPosition | None:
@@ -60,7 +72,7 @@ async def get_or_detect_position(ball: Ball) -> PlayerPosition | None:
     except DoesNotExist:
         pass
 
-    name = ball.country
+    name = _strip_season_prefix(ball.country)
     pos = get_position_for_name(name)
     if pos is not None:
         primary, secondary = pos

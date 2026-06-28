@@ -222,6 +222,15 @@ def draw_card(
     ball_credits = ball.credits
     special_credits = ""
     card_name = ball.cached_regime.name
+
+    # Full card override: if set, replace the entire card output with this image
+    # and skip every other element (background, artwork, text, stats, etc.)
+    full_override = getattr(ball, "card_full_override", None)
+    if full_override:
+        override_img = Image.open(media_path + full_override).convert("RGBA")
+        override_img = ImageOps.fit(override_img, (WIDTH, HEIGHT))
+        return override_img, {"format": "WEBP"}
+
     if special_image := ball_instance.special_card:
         card_name = getattr(ball_instance.specialcard, "name", card_name)
         image = Image.open(media_path + special_image)
@@ -357,13 +366,64 @@ def draw_card(
         glow_color=s("credits", "glow_color", "#FFFFFF"),
     )
 
-    artwork = Image.open(media_path + ball.collection_card).convert("RGBA")
-    image.paste(ImageOps.fit(artwork, artwork_size), CORNERS[0])  # type: ignore
-
     if icon:
         icon = ImageOps.fit(icon, (192, 192))
         image.paste(icon, (1200, 30), mask=icon)
         icon.close()
-    artwork.close()
 
-    return image, {"format": "WEBP"}
+    # Pre-load the overlay once (it's the same on every frame for animated artwork)
+    overlay_path = getattr(ball, "card_overlay", None)
+    overlay_img: Image.Image | None = None
+    if overlay_path:
+        overlay_img = Image.open(media_path + overlay_path).convert("RGBA")
+        if overlay_img.size != image.size:
+            overlay_img = overlay_img.resize(image.size, Image.LANCZOS)
+
+    def _finalize(card: Image.Image) -> Image.Image:
+        """Composite the overlay (if any) on top of the finished card frame."""
+        if overlay_img is None:
+            return card
+        if card.mode != "RGBA":
+            card = card.convert("RGBA")
+        return Image.alpha_composite(card, overlay_img)
+
+    artwork = Image.open(media_path + ball.collection_card)
+    n_frames: int = getattr(artwork, "n_frames", 1)
+
+    if n_frames <= 1:
+        # Static artwork — single image output
+        artwork_rgba = artwork.convert("RGBA")
+        image.paste(ImageOps.fit(artwork_rgba, artwork_size), CORNERS[0])  # type: ignore
+        artwork_rgba.close()
+        artwork.close()
+        result = _finalize(image)
+        if overlay_img is not None:
+            overlay_img.close()
+        return result, {"format": "WEBP"}
+
+    # Animated artwork (GIF / animated WebP) — composite each frame on a copy
+    frames: list[Image.Image] = []
+    durations: list[int] = []
+    for frame_idx in range(n_frames):
+        artwork.seek(frame_idx)
+        frame_rgba = artwork.convert("RGBA")
+        card_frame = image.copy()
+        card_frame.paste(ImageOps.fit(frame_rgba, artwork_size), CORNERS[0])  # type: ignore
+        frames.append(_finalize(card_frame))
+        durations.append(artwork.info.get("duration", 100))
+        frame_rgba.close()
+
+    artwork.close()
+    image.close()
+    if overlay_img is not None:
+        overlay_img.close()
+
+    first = frames[0]
+    rest = frames[1:]
+    return first, {
+        "format": "WEBP",
+        "save_all": True,
+        "append_images": rest,
+        "loop": 0,
+        "duration": durations,
+    }

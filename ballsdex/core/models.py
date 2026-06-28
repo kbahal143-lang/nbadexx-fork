@@ -193,6 +193,14 @@ class Ball(models.Model):
     collection_card = fields.CharField(
         max_length=200, description="Image used when displaying balls"
     )
+    card_overlay = fields.CharField(
+        max_length=200, null=True, description="Optional overlay drawn on top of the finished card"
+    )
+    card_full_override = fields.CharField(
+        max_length=200,
+        null=True,
+        description="Optional image that replaces the entire card output",
+    )
     credits = fields.CharField(max_length=64, description="Author of the collection artwork")
     capacity_name = fields.CharField(
         max_length=64, description="Name of the countryball's ability"
@@ -375,6 +383,8 @@ class BallInstance(models.Model):
         buffer = BytesIO()
         image.save(buffer, **kwargs)
         buffer.seek(0)
+        for frame in kwargs.get("append_images", []):
+            frame.close()
         image.close()
         return buffer
 
