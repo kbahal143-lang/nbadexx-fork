@@ -108,3 +108,42 @@ class MatchResult(Model):
 
     class Meta:
         table = "battle_matchresult"
+
+
+class BattleProfile(Model):
+    """All-time battle stats per Discord user (fresh — starts at zero)."""
+
+    discord_id = fields.BigIntField(unique=True)
+    wins = fields.IntField(default=0)
+    losses = fields.IntField(default=0)
+    current_streak = fields.IntField(default=0)  # positive = active win streak
+
+    class Meta:
+        table = "battle_profile"
+
+
+class BattleCardStats(Model):
+    """Cumulative points scored per specific card instance per Discord user.
+
+    Stats travel with the card — on trade the discord_id is updated to the new owner.
+    On quicksell/deletion the row is removed entirely.
+    """
+
+    discord_id = fields.BigIntField()
+    instance_id = fields.BigIntField()   # exact BallInstance.pk
+    total_pts = fields.IntField(default=0)
+
+    class Meta:
+        table = "battle_card_stats"
+        unique_together = (("discord_id", "instance_id"),)
+
+
+class BattleShowcase(Model):
+    """The card a user has pinned to their /profile as their showcase."""
+
+    discord_id = fields.BigIntField(unique=True)
+    instance_id = fields.BigIntField()   # exact BallInstance.pk the user chose
+    art_type = fields.CharField(max_length=10, default="card")  # "spawn" or "card"
+
+    class Meta:
+        table = "battle_showcase"

@@ -21,6 +21,7 @@ from ballsdex.core.models import (
     Ball,
     balls,
 )
+from ballsdex.packages.battle.models import BattleCardStats
 from ballsdex.packages.coins.models import BallValue
 from ballsdex.core.utils.buttons import ConfirmChoiceView
 from ballsdex.core.utils.paginator import FieldPageSource, Pages
@@ -89,6 +90,11 @@ class DonationRequest(View):
         self.countryball.trade_player = self.countryball.player
         self.countryball.player = self.new_player
         await self.countryball.save()
+        # Transfer battle stats to the new owner
+        await BattleCardStats.filter(
+            discord_id=self.countryball.trade_player.discord_id,
+            instance_id=self.countryball.pk,
+        ).update(discord_id=self.new_player.discord_id)
         trade = await Trade.create(player1=self.countryball.trade_player, player2=self.new_player)
         await TradeObject.create(
             trade=trade, ballinstance=self.countryball, player=self.countryball.trade_player
@@ -685,6 +691,11 @@ class Balls(commands.GroupCog, group_name=settings.players_group_cog_name):
         countryball.trade_player = old_player
         countryball.favorite = False
         await countryball.save()
+        # Transfer battle stats to the new owner
+        await BattleCardStats.filter(
+            discord_id=old_player.discord_id,
+            instance_id=countryball.pk,
+        ).update(discord_id=new_player.discord_id)
 
         trade = await Trade.create(player1=old_player, player2=new_player)
         await TradeObject.create(trade=trade, ballinstance=countryball, player=old_player)

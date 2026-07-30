@@ -31,7 +31,7 @@ from ballsdex.packages.balls.countryballs_paginator import CountryballsSource
 from ballsdex.packages.coins.models import Pack, PlayerMoney, PlayerPack
 from ballsdex.packages.coins.transformers import PackTransform
 
-from .models import PlayerPosition, Team, MatchResult
+from .models import PlayerPosition, Team, MatchResult, BattleProfile, BattleCardStats
 from .simulation import build_sim_teams, run_match
 from .team import get_or_detect_position, is_base_card
 
@@ -47,11 +47,12 @@ log = logging.getLogger("ballsdex.packages.battle")
 BATTLE_GUILD_ID = 1440962506796433519
 
 # Coin reward given to BOTH winner and loser at the end of every completed match.
-MATCH_COIN_REWARD = 10_000
+MATCH_COIN_REWARD = 20_000
 # Maximum number of times a user can collect the match reward in a single UTC day.
+# This is also the maximum number of battles allowed per player per day.
 MATCH_REWARD_DAILY_LIMIT = 10
 # Cooldown in seconds before the same two players can challenge each other again.
-CHALLENGE_COOLDOWN_SECS = 180
+CHALLENGE_COOLDOWN_SECS = 600
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -485,6 +486,49 @@ class MatchBulkStakeView(Pages):
 # Match Cog
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Battle profile stats helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _update_battle_stats(
+    winner_id: int,
+    loser_id: int,
+    winner_sim: "TeamSim",
+    loser_sim: "TeamSim",
+    winner_slots: dict,
+    loser_slots: dict,
+) -> None:
+    """Update BattleProfile win/loss/streak and per-card BattleCardStats after a match."""
+    # Winner: +1 win, extend streak
+    w_prof, _ = await BattleProfile.get_or_create(discord_id=winner_id)
+    w_prof.wins += 1
+    w_prof.current_streak = max(w_prof.current_streak, 0) + 1
+    await w_prof.save()
+
+    # Loser: +1 loss, reset streak
+    l_prof, _ = await BattleProfile.get_or_create(discord_id=loser_id)
+    l_prof.losses += 1
+    l_prof.current_streak = 0
+    await l_prof.save()
+
+    # Per-card points — both teams
+    for sim_team, slots, discord_id in (
+        (winner_sim, winner_slots, winner_id),
+        (loser_sim, loser_slots, loser_id),
+    ):
+        for pos in ("PG", "SG", "SF", "PF", "C"):
+            player_sim = getattr(sim_team, pos.lower(), None)
+            inst = slots.get(pos)
+            if player_sim is None or inst is None or player_sim.pts <= 0:
+                continue
+            stat, _ = await BattleCardStats.get_or_create(
+                discord_id=discord_id,
+                instance_id=inst.pk,
+            )
+            stat.total_pts += player_sim.pts
+            await stat.save()
+
+
 @app_commands.guild_only()
 class MatchCog(commands.GroupCog, group_name="match"):
     """Challenge other players to a basketball match."""
@@ -623,6 +667,54 @@ class MatchCog(commands.GroupCog, group_name="match"):
             await interaction.followup.send(
                 f"❌ **{member.display_name}**'s lineup isn't full. "
                 "They need all 5 positions filled before they can be challenged.",
+                ephemeral=True,
+            )
+            return
+
+        # ── Daily battle limit — block the match entirely if either player maxed out ──
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        ch_today = await MatchResult.filter(
+            Q(challenger_discord_id=interaction.user.id) | Q(challenged_discord_id=interaction.user.id),
+            played_at__gte=today_start,
+        ).count()
+        cd_today = await MatchResult.filter(
+            Q(challenger_discord_id=member.id) | Q(challenged_discord_id=member.id),
+            played_at__gte=today_start,
+        ).count()
+
+        if ch_today >= MATCH_REWARD_DAILY_LIMIT:
+            await interaction.followup.send(
+                f"❌ You've played **{ch_today}/{MATCH_REWARD_DAILY_LIMIT}** battles today — daily limit reached. Come back tomorrow!",
+                ephemeral=True,
+            )
+            return
+        if cd_today >= MATCH_REWARD_DAILY_LIMIT:
+            await interaction.followup.send(
+                f"❌ **{member.display_name}** has played **{cd_today}/{MATCH_REWARD_DAILY_LIMIT}** battles today — daily limit reached.",
+                ephemeral=True,
+            )
+            return
+
+        # ── Stats difference check — block if teams are more than 200 total stats apart ──
+        async def _team_total_stats(team: Team) -> int:
+            total = 0
+            for _pos in ("PG", "SG", "SF", "PF", "C"):
+                _sid = team.get_slot_id(_pos)
+                if _sid:
+                    try:
+                        _inst = await BallInstance.get(pk=_sid).prefetch_related("ball")
+                        total += _inst.battle_attack + _inst.battle_health
+                    except Exception:
+                        pass
+            return total
+
+        ch_stats = await _team_total_stats(ch_team)
+        cd_stats = await _team_total_stats(cd_team)
+        stats_diff = abs(ch_stats - cd_stats)
+        if stats_diff > 300:
+            await interaction.followup.send(
+                f"❌ The stat gap between your teams is too large (**{stats_diff}** point difference, max **300**).\n"
+                f"Your team: **{ch_stats}** total stats · {member.display_name}'s team: **{cd_stats}** total stats.",
                 ephemeral=True,
             )
             return
@@ -1046,11 +1138,55 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
     async def start_simulation(self, session: MatchSession):
         """Run the match simulation — called after both players lock in."""
-        # Guard: if somehow called twice (race condition), the second call exits immediately.
-        if session.status == "done":
+        # Guard: bail if already simulating or finished.
+        # lock_in sets status → "simulating" synchronously before creating this task,
+        # so any duplicate call (e.g. from a race or re-entry) will see "simulating" here.
+        if session.status in ("simulating", "done"):
             return
+
         session.status = "simulating"
 
+        try:
+            await self._run_simulation(session)
+        except Exception:
+            log.exception("Unhandled crash in start_simulation — forcing session cleanup")
+            # Only clean up if the inner body didn't already mark it done
+            if session.status != "done":
+                session.status = "done"
+                self.active_matches.pop(session.session_key, None)
+                all_ids: list[int] = []
+                for _s in session.stakes.values():
+                    all_ids.extend(_s.ball_ids)
+                if all_ids:
+                    try:
+                        await BallInstance.filter(pk__in=all_ids).update(tradeable=True)
+                    except Exception:
+                        pass
+                for _uid, _s in session.stakes.items():
+                    _p = await Player.get_or_none(discord_id=_uid)
+                    if not _p:
+                        continue
+                    if _s.coins > 0:
+                        _pm, _ = await PlayerMoney.get_or_create(player=_p)
+                        _pm.coins += _s.coins
+                        await _pm.save()
+                    for _pack_id, _qty in _s.packs.items():
+                        if _qty > 0:
+                            _pp, _ = await PlayerPack.get_or_create(player=_p, pack_id=_pack_id)
+                            _pp.quantity += _qty
+                            await _pp.save()
+                try:
+                    _ch = self.bot.get_channel(session.channel_id)
+                    if _ch:
+                        await _ch.send(
+                            "⚠️ The match crashed unexpectedly — all stakes returned. "
+                            "You can now start a new match."
+                        )
+                except Exception:
+                    pass
+
+    async def _run_simulation(self, session: MatchSession):
+        """Inner simulation body — always called via start_simulation, never directly."""
         guild = self.bot.get_guild(session.guild_id)
         ch_member = guild.get_member(session.challenger_id) if guild else None
         cd_member = guild.get_member(session.challenged_id) if guild else None
@@ -1246,6 +1382,18 @@ class MatchCog(commands.GroupCog, group_name="match"):
         except Exception:
             log.exception("Failed to save MatchResult")
 
+        # ── Update battle profiles and per-card stats
+        winner_slots = slots_a if winner_sim is team_a_sim else slots_b
+        loser_slots = slots_b if winner_sim is team_a_sim else slots_a
+        try:
+            await _update_battle_stats(
+                winner_id, loser_id,
+                winner_sim, loser_sim,
+                winner_slots, loser_slots,
+            )
+        except Exception:
+            log.exception("Failed to update battle profiles")
+
         # ── Set 3-minute challenge cooldown for this pair
         self._challenge_cooldowns[session.session_key] = time.time() + CHALLENGE_COOLDOWN_SECS
         winner_stake = session.stakes.get(winner_id, UserStake())
@@ -1266,6 +1414,13 @@ class MatchCog(commands.GroupCog, group_name="match"):
                 await BallInstance.filter(pk__in=loser_ball_ids).update(
                     trade_player=loser_player
                 )
+            # Transfer BattleCardStats for loser's staked cards to the winner.
+            # Winner's own staked cards stay under winner_id (no change needed).
+            if loser_ball_ids and loser_player:
+                await BattleCardStats.filter(
+                    discord_id=loser_id,
+                    instance_id__in=loser_ball_ids,
+                ).update(discord_id=winner_id)
         elif all_ball_ids:
             await BallInstance.filter(pk__in=all_ball_ids).update(tradeable=True)
 

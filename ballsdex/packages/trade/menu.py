@@ -378,6 +378,8 @@ class TradeMenu:
 
         trade = await Trade.create(player1=self.trader1.player, player2=self.trader2.player)
 
+        from ballsdex.packages.battle.models import BattleCardStats
+
         for countryball in self.trader1.proposal:
             await countryball.refresh_from_db()
             if countryball.deleted:
@@ -391,6 +393,11 @@ class TradeMenu:
             await TradeObject.create(
                 trade=trade, ballinstance=countryball, player=self.trader1.player
             )
+            # Transfer battle stats to the new owner
+            await BattleCardStats.filter(
+                discord_id=self.trader1.player.discord_id,
+                instance_id=countryball.pk,
+            ).update(discord_id=self.trader2.player.discord_id)
 
         for countryball in self.trader2.proposal:
             await countryball.refresh_from_db()
@@ -405,6 +412,11 @@ class TradeMenu:
             await TradeObject.create(
                 trade=trade, ballinstance=countryball, player=self.trader2.player
             )
+            # Transfer battle stats to the new owner
+            await BattleCardStats.filter(
+                discord_id=self.trader2.player.discord_id,
+                instance_id=countryball.pk,
+            ).update(discord_id=self.trader1.player.discord_id)
 
         for countryball in valid_transferable_countryballs:
             await countryball.unlock()

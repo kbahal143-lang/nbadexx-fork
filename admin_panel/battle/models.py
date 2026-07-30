@@ -90,3 +90,58 @@ class MatchResult(models.Model):
 
     def __str__(self):
         return f"Match @ {self.played_at:%Y-%m-%d %H:%M} | Winner: {self.winner_discord_id}"
+
+
+class BattleProfile(models.Model):
+    """All-time battle stats per Discord user."""
+
+    discord_id = models.BigIntegerField(unique=True)
+    wins = models.IntegerField(default=0)
+    losses = models.IntegerField(default=0)
+    current_streak = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "battle_profile"
+        verbose_name = "Battle Profile"
+        verbose_name_plural = "Battle Profiles"
+        ordering = ["-wins"]
+
+    def __str__(self):
+        return f"Profile {self.discord_id}  W{self.wins}/L{self.losses}"
+
+
+class BattleCardStats(models.Model):
+    """Cumulative points scored per specific card instance per Discord user.
+
+    Stats travel with the card on trade; deleted on quicksell/deletion.
+    """
+
+    discord_id = models.BigIntegerField()
+    instance_id = models.BigIntegerField()
+    total_pts = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = "battle_card_stats"
+        verbose_name = "Battle Card Stats"
+        verbose_name_plural = "Battle Card Stats"
+        ordering = ["-total_pts"]
+        unique_together = [("discord_id", "instance_id")]
+
+    def __str__(self):
+        return f"User {self.discord_id}  Instance {self.instance_id}  {self.total_pts} pts"
+
+
+class BattleShowcase(models.Model):
+    """The card pinned to a user's /profile as their showcase."""
+
+    discord_id = models.BigIntegerField(unique=True)
+    instance_id = models.BigIntegerField()   # exact BallInstance pk the user chose
+    art_type = models.CharField(max_length=10, default="card")
+
+    class Meta:
+        db_table = "battle_showcase"
+        verbose_name = "Battle Showcase"
+        verbose_name_plural = "Battle Showcases"
+
+    def __str__(self):
+        return f"Showcase {self.discord_id}  Instance {self.instance_id}  ({self.art_type})"

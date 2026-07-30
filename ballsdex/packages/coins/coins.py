@@ -11,6 +11,7 @@ from ballsdex.core.models import (
     BallInstance,
     Player
 )
+from ballsdex.packages.battle.models import BattleCardStats
 from ballsdex.core.utils import menus
 from ballsdex.core.utils.paginator import Pages
 from ballsdex.core.utils.sorting import FilteringChoices, SortingChoices, filter_balls, sort_balls
@@ -407,7 +408,9 @@ class Coins(commands.GroupCog, group_name="coins"):
                 countryball.deleted = True
                 await countryball.save(update_fields=["deleted"])
                 await countryball.unlock()
-                
+                # Remove battle stats for this instance — card no longer exists
+                await BattleCardStats.filter(instance_id=countryball.pk).delete()
+
                 money.coins += final_value
                 await money.save(update_fields=["coins"])
             
@@ -575,6 +578,8 @@ class Coins(commands.GroupCog, group_name="coins"):
                         actual_value += value
                         inst.deleted = True
                         await inst.save(update_fields=["deleted"])
+                        # Remove battle stats — card no longer exists
+                        await BattleCardStats.filter(instance_id=inst.pk).delete()
                         sold_count += 1
                     await inst.unlock()
                 

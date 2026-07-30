@@ -1,6 +1,6 @@
 """
 /team command group for the Battle package.
-All commands work with enabled base player cards only.
+Commands work with any tradeable base player card (enabled or disabled).
 """
 
 import logging
@@ -53,11 +53,9 @@ POSITION_CHOICES = [
 
 
 def is_base_card(ball: Ball) -> bool:
-    """Returns True if this is a simple, enabled player-name card.
+    """Returns True if this is a simple player-name card (enabled or disabled).
     A leading season prefix (e.g. "2025-26 ") is stripped before checking,
     so season-tagged player cards still qualify."""
-    if not ball.enabled:
-        return False
     cleaned = _strip_season_prefix(ball.country)
     return bool(_BASE_CARD_RE.match(cleaned))
 
@@ -132,11 +130,11 @@ class TeamCog(commands.GroupCog, group_name="team"):
         ball = inst.ball
         pos = position.value
 
-        # 1. Must be an enabled base card
+        # 1. Must be a base player card (enabled or disabled, tradeable is checked below)
         if not is_base_card(ball):
             await interaction.followup.send(
                 f"❌ **{ball.country}** is not a base player card.\n"
-                "Only enabled cards with simple player names (no years, no special tags) can be in your lineup.",
+                "Only cards with simple player names (no years, no special tags) can be in your lineup.",
                 ephemeral=True,
             )
             return
@@ -207,10 +205,9 @@ class TeamCog(commands.GroupCog, group_name="team"):
             await BallInstance.filter(pk=old_slot_id).update(tradeable=True)
         await BallInstance.filter(pk=inst.pk).update(tradeable=False)
 
-        star = "⭐" * max(1, round(ball.rarity * 5))
         await interaction.followup.send(
             f"✅ **{ball.country}** [{pp.display()}] added to your **{POSITION_LABELS[pos]}** slot!\n"
-            f"{star}  ⚔ {inst.battle_attack}  🛡 {inst.battle_health}",
+            f"⚔ {inst.battle_attack}  🛡 {inst.battle_health}",
             ephemeral=True,
         )
 
@@ -326,22 +323,15 @@ class TeamCog(commands.GroupCog, group_name="team"):
         new_lineup_ids: list[int] = []
 
         for pos in ("PG", "SG", "SF", "PF", "C"):
-            primary_cands = [
+            # Combine primary and secondary — best stats wins regardless of which it is
+            candidates = [
                 i for i in base_insts
                 if i.pk in pos_map
-                and pos_map[i.pk].primary == pos
-                and i.pk not in assigned
-                and i.ball.pk not in assigned_balls
-            ]
-            secondary_cands = [
-                i for i in base_insts
-                if i.pk in pos_map
-                and pos_map[i.pk].secondary == pos
+                and pos_map[i.pk].allows(pos)
                 and i.pk not in assigned
                 and i.ball.pk not in assigned_balls
             ]
 
-            candidates = primary_cands or secondary_cands
             if not candidates:
                 team.set_slot_id(pos, None)
                 result_lines.append(f"**{pos}** — No eligible card found")
@@ -406,11 +396,10 @@ class TeamCog(commands.GroupCog, group_name="team"):
                     if inst.player_id != player.pk:
                         lines.append(f"**{pos}** · *(card no longer owned)*")
                     else:
-                        stars = "⭐" * max(1, round(inst.ball.rarity * 5))
                         spec_emoji = inst.special_emoji(interaction.client)
                         spec_name = f" ({inst.specialcard.name})" if inst.specialcard else ""
                         lines.append(
-                            f"**{pos}** · {spec_emoji}{inst.ball.country}{spec_name}  {stars}\n"
+                            f"**{pos}** · {spec_emoji}{inst.ball.country}{spec_name}\n"
                             f"  ⚔ {inst.battle_attack}  🛡 {inst.battle_health}"
                         )
                         total_atk += inst.battle_attack

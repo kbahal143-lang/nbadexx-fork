@@ -57,6 +57,7 @@ def sort_balls(
         return queryset.annotate(
             qs_val=RawSQL(
                 'COALESCE((SELECT cv.quicksell_value FROM coins_ballvalue cv WHERE cv.ball_id = "ballinstance"."ball_id"), 100)'
+                ' * COALESCE((SELECT s.quicksell_multiplier FROM special s WHERE s.id = "ballinstance"."special_id"), 1.0)'
             )
         ).order_by("-qs_val")
     elif sort == SortingChoices.catch_time:

@@ -20,7 +20,6 @@ from .coins import CoinsAdmin as CoinsGroup, PacksAdmin as PacksGroup
 from ballsdex.packages.battle.battle_admin import BattleAdmin as BattleGroup
 from ballsdex.packages.auction.auction_admin import AuctionAdmin as AuctionGroup
 from ballsdex.packages.collector.collector_admin import CollectorAdmin as CollectorGroup
-
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
     from ballsdex.packages.countryballs.cog import CountryBallsSpawner
