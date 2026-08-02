@@ -1488,7 +1488,7 @@ class MatchCog(commands.GroupCog, group_name="match"):
         session.status = "done"
         self.active_matches.pop(session.session_key, None)
 
-        # ── Give 50k flat match reward to both players (each capped at 10/day independently)
+        # ── Give 20k flat match reward to both players (each capped at 10/day independently)
         # Anti-exploit: reward only on COMPLETED matches, each user tracked separately,
         # limit resets at UTC midnight, and the 3-minute cooldown prevents rapid farming.
         winner_reward_given = False
@@ -1565,7 +1565,7 @@ class MatchCog(commands.GroupCog, group_name="match"):
                 inline=False,
             )
 
-        # ── Match completion reward — 50k to both players (if under daily limit)
+        # ── Match completion reward — 20k to both players (if under daily limit)
         reward_lines: list[str] = []
         if winner_reward_given:
             used_after = winner_today + 1
