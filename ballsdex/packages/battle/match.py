@@ -1138,13 +1138,11 @@ class MatchCog(commands.GroupCog, group_name="match"):
 
     async def start_simulation(self, session: MatchSession):
         """Run the match simulation — called after both players lock in."""
-        # Guard: bail if already simulating or finished.
-        # lock_in sets status → "simulating" synchronously before creating this task,
-        # so any duplicate call (e.g. from a race or re-entry) will see "simulating" here.
-        if session.status in ("simulating", "done"):
+        # Guard: bail only if already finished. Status is already "simulating"
+        # (set synchronously in lock_in before this task was created) so we
+        # must NOT check for "simulating" here or we'd bail immediately.
+        if session.status == "done":
             return
-
-        session.status = "simulating"
 
         try:
             await self._run_simulation(session)
