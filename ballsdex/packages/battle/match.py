@@ -1262,7 +1262,7 @@ class MatchCog(commands.GroupCog, group_name="match"):
                 slot_id = team.get_slot_id(pos)
                 if slot_id:
                     try:
-                        inst = await BallInstance.get(pk=slot_id).prefetch_related("ball")
+                        inst = await BallInstance.get(pk=slot_id).prefetch_related("ball", "special")
                         slots[pos] = inst
                     except DoesNotExist:
                         slots[pos] = None
