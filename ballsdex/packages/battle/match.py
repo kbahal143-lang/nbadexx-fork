@@ -1208,9 +1208,53 @@ class MatchCog(commands.GroupCog, group_name="match"):
         ch_player = await Player.get_or_none(discord_id=session.challenger_id)
         cd_player = await Player.get_or_none(discord_id=session.challenged_id)
 
-        # Load teams
-        ch_team = await Team.get(player=ch_player)
-        cd_team = await Team.get(player=cd_player)
+        # Guard: both players must have a DB record
+        if not ch_player or not cd_player:
+            missing_name = ch_name if not ch_player else cd_name
+            session.status = "staking"
+            await self.cancel_match(session, cancelled_by=None, reason="cancelled")
+            try:
+                channel = self.bot.get_channel(session.channel_id)
+                if channel:
+                    await channel.send(
+                        f"❌ Match cancelled — **{missing_name}** has no account on record. "
+                        "All stakes returned."
+                    )
+            except Exception:
+                pass
+            return
+
+        # Load teams — guard against team being deleted between challenge and simulation
+        try:
+            ch_team = await Team.get(player=ch_player)
+        except DoesNotExist:
+            session.status = "staking"
+            await self.cancel_match(session, cancelled_by=None, reason="cancelled")
+            try:
+                channel = self.bot.get_channel(session.channel_id)
+                if channel:
+                    await channel.send(
+                        f"❌ Match cancelled — **{ch_name}**'s lineup no longer exists. "
+                        "All stakes returned."
+                    )
+            except Exception:
+                pass
+            return
+        try:
+            cd_team = await Team.get(player=cd_player)
+        except DoesNotExist:
+            session.status = "staking"
+            await self.cancel_match(session, cancelled_by=None, reason="cancelled")
+            try:
+                channel = self.bot.get_channel(session.channel_id)
+                if channel:
+                    await channel.send(
+                        f"❌ Match cancelled — **{cd_name}**'s lineup no longer exists. "
+                        "All stakes returned."
+                    )
+            except Exception:
+                pass
+            return
 
         async def load_slots(team: Team) -> dict:
             slots = {}
