@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("ballsdex.packages.battle")
 
-BATTLE_GUILD_ID = 1157610381250940978
+BATTLE_GUILD_ID = 1440962506796433519
 MEDIA_ROOT = "./admin_panel/media/"
 
 
