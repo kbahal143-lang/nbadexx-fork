@@ -1,11 +1,14 @@
 import os
 import textwrap
+import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from ballsdex.settings import settings
+from ballsdex.core.image_generator.font_catalog import font_path
 
 if TYPE_CHECKING:
     from ballsdex.core.models import BallInstance
@@ -26,11 +29,84 @@ capacity_name_font = ImageFont.truetype(str(SOURCES_PATH / "Bobby Jones Soft.otf
 capacity_description_font = ImageFont.truetype(str(SOURCES_PATH / "OpenSans-Semibold.ttf"), 75)
 stats_font = ImageFont.truetype(str(SOURCES_PATH / "Bobby Jones Soft.otf"), 130)
 credits_font = ImageFont.truetype(str(SOURCES_PATH / "arial.ttf"), 40)
+log = logging.getLogger("ballsdex.core.image_generator")
+
+_CUSTOM_FONT_SIZES = {
+    "title": 170,
+    "ability_name": 110,
+    "ability_description": 75,
+    "stats": 130,
+    "credits": 40,
+    "rarity": 130,
+}
+_CUSTOM_FONT_MIN_SIZES = {
+    "title": 40,
+    "ability_name": 38,
+    "ability_description": 30,
+    "stats": 48,
+    "credits": 22,
+    "rarity": 48,
+}
 
 credits_color_cache: dict = {}
 
 _ball_styles: dict[int, dict] = {}
 _special_styles: dict[int, dict] = {}
+
+
+@lru_cache(maxsize=64)
+def _load_font(font_family: str, role: str) -> ImageFont.FreeTypeFont:
+    """Load a selected card font at the role's existing scale."""
+    defaults = {
+        "title": title_font,
+        "ability_name": capacity_name_font,
+        "ability_description": capacity_description_font,
+        "stats": stats_font,
+        "credits": credits_font,
+        "rarity": stats_font,
+    }
+    if font_family == "default":
+        return defaults[role]
+
+    path = font_path(font_family)
+    if path is None:
+        log.error("Configured card font '%s' is missing; using original font.", font_family)
+        return defaults[role]
+
+    try:
+        return ImageFont.truetype(str(path), _CUSTOM_FONT_SIZES[role])
+    except OSError:
+        log.exception("Could not load card font '%s'; using original font.", font_family)
+        return defaults[role]
+
+
+def _card_font(style: dict | None, role: str) -> ImageFont.FreeTypeFont:
+    return _load_font((style or {}).get("font_family", "default"), role)
+
+
+def _fit_card_font(
+    style: dict | None,
+    role: str,
+    text: str,
+    max_width: int,
+) -> ImageFont.FreeTypeFont:
+    """Keep custom display fonts inside the same card geometry."""
+    font_family = (style or {}).get("font_family", "default")
+    if font_family == "default":
+        return _card_font(style, role)
+
+    path = font_path(font_family)
+    if path is None:
+        return _card_font(style, role)
+
+    size = _CUSTOM_FONT_SIZES[role]
+    minimum = _CUSTOM_FONT_MIN_SIZES[role]
+    while size > minimum:
+        font = ImageFont.truetype(str(path), size)
+        if font.getlength(text) <= max_width:
+            return font
+        size -= 2
+    return ImageFont.truetype(str(path), minimum)
 
 
 async def refresh_card_style() -> None:
@@ -244,6 +320,9 @@ def draw_card(
         if ball.cached_economy
         else None
     )
+    economy_icon = ImageOps.fit(icon, (192, 192)) if icon else None
+    if icon:
+        icon.close()
 
     ball_style = _ball_styles.get(ball.pk)
     if ball_style is None and ball_instance.special_id:
@@ -252,140 +331,155 @@ def draw_card(
     def s(prefix: str, attr: str, default: Any) -> Any:
         return _gs(ball_style, prefix, attr, default)
 
-    _draw_styled_text(
-        image, (50, 20),
-        ball.short_name or ball.country,
-        title_font,
-        color=s("title", "color", "#FFFFFF"),
-        gradient_end=s("title", "gradient_end", ""),
-        gradient_dir=s("title", "gradient_dir", "horizontal"),
-        stroke_width=s("title", "stroke_width", 2),
-        stroke_color=s("title", "stroke_color", "#000000"),
-        glow_radius=s("title", "glow_radius", 0),
-        glow_color=s("title", "glow_color", "#FFFFFF"),
+    # A special-specific overlay takes precedence; otherwise use the base card's overlay.
+    # Pre-load it once because it is shared across every animated artwork frame.
+    special_card = getattr(ball_instance, "specialcard", None)
+    overlay_path = getattr(special_card, "card_overlay", None) or getattr(
+        ball, "card_overlay", None
     )
-
-    cap_name = textwrap.wrap(f"Ability: {ball.capacity_name}", width=26)
-    for i, line in enumerate(cap_name):
-        _draw_styled_text(
-            image, (100, 1050 + 100 * i),
-            line,
-            capacity_name_font,
-            color=s("ability_name", "color", "#E6E6E6"),
-            gradient_end=s("ability_name", "gradient_end", ""),
-            gradient_dir=s("ability_name", "gradient_dir", "horizontal"),
-            stroke_width=s("ability_name", "stroke_width", 2),
-            stroke_color=s("ability_name", "stroke_color", "#000000"),
-            glow_radius=s("ability_name", "glow_radius", 0),
-            glow_color=s("ability_name", "glow_color", "#FFFFFF"),
-        )
-
-    cap_desc_lines = list(
-        wrapped
-        for newline in ball.capacity_description.splitlines()
-        for wrapped in textwrap.wrap(newline, 32)
-    )
-    for i, line in enumerate(cap_desc_lines):
-        _draw_styled_text(
-            image, (60, 1100 + 100 * len(cap_name) + 80 * i),
-            line,
-            capacity_description_font,
-            color=s("ability_desc", "color", "#FFFFFF"),
-            gradient_end=s("ability_desc", "gradient_end", ""),
-            gradient_dir=s("ability_desc", "gradient_dir", "horizontal"),
-            stroke_width=s("ability_desc", "stroke_width", 1),
-            stroke_color=s("ability_desc", "stroke_color", "#000000"),
-            glow_radius=s("ability_desc", "glow_radius", 0),
-            glow_color=s("ability_desc", "glow_color", "#FFFFFF"),
-        )
-
-    _draw_styled_text(
-        image, (320, 1670),
-        str(ball_instance.battle_health),
-        stats_font,
-        color=s("health", "color", "#ED7365"),
-        gradient_end=s("health", "gradient_end", ""),
-        gradient_dir=s("health", "gradient_dir", "horizontal"),
-        stroke_width=s("health", "stroke_width", 1),
-        stroke_color=s("health", "stroke_color", "#000000"),
-        glow_radius=s("health", "glow_radius", 0),
-        glow_color=s("health", "glow_color", "#FF0000"),
-    )
-
-    _draw_styled_text(
-        image, (1120, 1670),
-        str(ball_instance.battle_attack),
-        stats_font,
-        color=s("attack", "color", "#FCC24C"),
-        gradient_end=s("attack", "gradient_end", ""),
-        gradient_dir=s("attack", "gradient_dir", "horizontal"),
-        stroke_width=s("attack", "stroke_width", 1),
-        stroke_color=s("attack", "stroke_color", "#000000"),
-        glow_radius=s("attack", "glow_radius", 0),
-        glow_color=s("attack", "glow_color", "#FFD700"),
-        anchor="ra",
-    )
-
-    if settings.show_rarity:
-        draw = ImageDraw.Draw(image)
-        draw.text(
-            (1200, 50),
-            str(ball.rarity),
-            font=stats_font,
-            stroke_width=2,
-            stroke_fill=(0, 0, 0, 255),
-        )
-
-    credits_text = (
-        f"Created by El Laggron{special_credits}\n"
-        f"Artwork author: {ball_credits}"
-    )
-
-    if s("credits", "auto_color", True):
-        if card_name in credits_color_cache:
-            credits_rgba = credits_color_cache[card_name]
-        else:
-            credits_rgba = get_credit_color(
-                image, (0, int(image.height * 0.8), image.width, image.height)
-            )
-            credits_color_cache[card_name] = credits_rgba
-        credits_hex = "#{:02X}{:02X}{:02X}".format(*credits_rgba[:3])
-    else:
-        credits_hex = s("credits", "color", "#FFFFFF")
-
-    _draw_styled_text(
-        image, (30, 1870),
-        credits_text,
-        credits_font,
-        color=credits_hex,
-        gradient_end=s("credits", "gradient_end", ""),
-        gradient_dir=s("credits", "gradient_dir", "horizontal"),
-        stroke_width=s("credits", "stroke_width", 0),
-        stroke_color=s("credits", "stroke_color", "#000000"),
-        glow_radius=s("credits", "glow_radius", 0),
-        glow_color=s("credits", "glow_color", "#FFFFFF"),
-    )
-
-    if icon:
-        icon = ImageOps.fit(icon, (192, 192))
-        image.paste(icon, (1200, 30), mask=icon)
-        icon.close()
-
-    # Pre-load the overlay once (it's the same on every frame for animated artwork)
-    overlay_path = getattr(ball, "card_overlay", None)
     overlay_img: Image.Image | None = None
     if overlay_path:
         overlay_img = Image.open(media_path + overlay_path).convert("RGBA")
         if overlay_img.size != image.size:
             overlay_img = overlay_img.resize(image.size, Image.LANCZOS)
 
-    def _finalize(card: Image.Image) -> Image.Image:
-        """Composite the overlay (if any) on top of the finished card frame."""
-        if overlay_img is None:
-            return card
-        if card.mode != "RGBA":
-            card = card.convert("RGBA")
-        return Image.alpha_composite(card, overlay_img)
+    def _draw_foreground(card: Image.Image) -> None:
+        """Draw all generated details above the collection artwork and overlay."""
+        selected_font = _fit_card_font(ball_style, "title", ball.short_name or ball.country, 1400)
+        _draw_styled_text(
+            card, (50, 20),
+            ball.short_name or ball.country,
+            selected_font,
+            color=s("title", "color", "#FFFFFF"),
+            gradient_end=s("title", "gradient_end", ""),
+            gradient_dir=s("title", "gradient_dir", "horizontal"),
+            stroke_width=s("title", "stroke_width", 2),
+            stroke_color=s("title", "stroke_color", "#000000"),
+            glow_radius=s("title", "glow_radius", 0),
+            glow_color=s("title", "glow_color", "#FFFFFF"),
+        )
+
+        ability_text_x = 60
+        cap_name = textwrap.wrap(ball.capacity_name, width=26)
+        for i, line in enumerate(cap_name):
+            selected_font = _fit_card_font(ball_style, "ability_name", line, 1300)
+            _draw_styled_text(
+                card, (ability_text_x, 1050 + 100 * i),
+                line,
+                selected_font,
+                color=s("ability_name", "color", "#E6E6E6"),
+                gradient_end=s("ability_name", "gradient_end", ""),
+                gradient_dir=s("ability_name", "gradient_dir", "horizontal"),
+                stroke_width=s("ability_name", "stroke_width", 2),
+                stroke_color=s("ability_name", "stroke_color", "#000000"),
+                glow_radius=s("ability_name", "glow_radius", 0),
+                glow_color=s("ability_name", "glow_color", "#FFFFFF"),
+            )
+
+        cap_desc_lines = list(
+            wrapped
+            for newline in ball.capacity_description.splitlines()
+            for wrapped in textwrap.wrap(newline, 32)
+        )
+        for i, line in enumerate(cap_desc_lines):
+            selected_font = _fit_card_font(ball_style, "ability_description", line, 1380)
+            _draw_styled_text(
+                card, (ability_text_x, 1100 + 100 * len(cap_name) + 80 * i),
+                line,
+                selected_font,
+                color=s("ability_desc", "color", "#FFFFFF"),
+                gradient_end=s("ability_desc", "gradient_end", ""),
+                gradient_dir=s("ability_desc", "gradient_dir", "horizontal"),
+                stroke_width=s("ability_desc", "stroke_width", 1),
+                stroke_color=s("ability_desc", "stroke_color", "#000000"),
+                glow_radius=s("ability_desc", "glow_radius", 0),
+                glow_color=s("ability_desc", "glow_color", "#FFFFFF"),
+            )
+
+        _draw_styled_text(
+            card, (320, 1670),
+            str(ball_instance.battle_health),
+            _fit_card_font(ball_style, "stats", str(ball_instance.battle_health), 420),
+            color=s("health", "color", "#ED7365"),
+            gradient_end=s("health", "gradient_end", ""),
+            gradient_dir=s("health", "gradient_dir", "horizontal"),
+            stroke_width=s("health", "stroke_width", 1),
+            stroke_color=s("health", "stroke_color", "#000000"),
+            glow_radius=s("health", "glow_radius", 0),
+            glow_color=s("health", "glow_color", "#FF0000"),
+        )
+
+        _draw_styled_text(
+            card, (1120, 1670),
+            str(ball_instance.battle_attack),
+            _fit_card_font(ball_style, "stats", str(ball_instance.battle_attack), 420),
+            color=s("attack", "color", "#FCC24C"),
+            gradient_end=s("attack", "gradient_end", ""),
+            gradient_dir=s("attack", "gradient_dir", "horizontal"),
+            stroke_width=s("attack", "stroke_width", 1),
+            stroke_color=s("attack", "stroke_color", "#000000"),
+            glow_radius=s("attack", "glow_radius", 0),
+            glow_color=s("attack", "glow_color", "#FFD700"),
+            anchor="ra",
+        )
+
+        if settings.show_rarity:
+            draw = ImageDraw.Draw(card)
+            draw.text(
+                (1200, 50),
+                str(ball.rarity),
+                font=_fit_card_font(ball_style, "rarity", str(ball.rarity), 260),
+                stroke_width=2,
+                stroke_fill=(0, 0, 0, 255),
+            )
+
+        credits_text = (
+            f"Created by El Laggron{special_credits}\n"
+            f"Artwork author: {ball_credits}"
+        )
+
+        if s("credits", "auto_color", True):
+            if card_name in credits_color_cache:
+                credits_rgba = credits_color_cache[card_name]
+            else:
+                credits_rgba = get_credit_color(
+                    card, (0, int(card.height * 0.8), card.width, card.height)
+                )
+                credits_color_cache[card_name] = credits_rgba
+            credits_hex = "#{:02X}{:02X}{:02X}".format(*credits_rgba[:3])
+        else:
+            credits_hex = s("credits", "color", "#FFFFFF")
+
+        _draw_styled_text(
+            card, (30, 1870),
+            credits_text,
+            _fit_card_font(ball_style, "credits", credits_text, 1440),
+            color=credits_hex,
+            gradient_end=s("credits", "gradient_end", ""),
+            gradient_dir=s("credits", "gradient_dir", "horizontal"),
+            stroke_width=s("credits", "stroke_width", 0),
+            stroke_color=s("credits", "stroke_color", "#000000"),
+            glow_radius=s("credits", "glow_radius", 0),
+            glow_color=s("credits", "glow_color", "#FFFFFF"),
+        )
+
+        if economy_icon:
+            card.paste(economy_icon, (1200, 30), mask=economy_icon)
+
+    def _render_artwork_frame(artwork_frame: Image.Image) -> Image.Image:
+        """Compose collection art, overlay, then generated text and economy icon."""
+        card = image.copy()
+        fitted_artwork = ImageOps.fit(artwork_frame, artwork_size)
+        card.paste(fitted_artwork, CORNERS[0])  # type: ignore
+        fitted_artwork.close()
+
+        if overlay_img is not None:
+            overlaid_card = Image.alpha_composite(card, overlay_img)
+            card.close()
+            card = overlaid_card
+
+        _draw_foreground(card)
+        return card
 
     artwork = Image.open(media_path + ball.collection_card)
     n_frames: int = getattr(artwork, "n_frames", 1)
@@ -393,12 +487,14 @@ def draw_card(
     if n_frames <= 1:
         # Static artwork — single image output
         artwork_rgba = artwork.convert("RGBA")
-        image.paste(ImageOps.fit(artwork_rgba, artwork_size), CORNERS[0])  # type: ignore
+        result = _render_artwork_frame(artwork_rgba)
         artwork_rgba.close()
         artwork.close()
-        result = _finalize(image)
+        image.close()
         if overlay_img is not None:
             overlay_img.close()
+        if economy_icon:
+            economy_icon.close()
         return result, {"format": "WEBP"}
 
     # Animated artwork (GIF / animated WebP) — composite each frame on a copy
@@ -407,9 +503,7 @@ def draw_card(
     for frame_idx in range(n_frames):
         artwork.seek(frame_idx)
         frame_rgba = artwork.convert("RGBA")
-        card_frame = image.copy()
-        card_frame.paste(ImageOps.fit(frame_rgba, artwork_size), CORNERS[0])  # type: ignore
-        frames.append(_finalize(card_frame))
+        frames.append(_render_artwork_frame(frame_rgba))
         durations.append(artwork.info.get("duration", 100))
         frame_rgba.close()
 
@@ -417,6 +511,8 @@ def draw_card(
     image.close()
     if overlay_img is not None:
         overlay_img.close()
+    if economy_icon:
+        economy_icon.close()
 
     first = frames[0]
     rest = frames[1:]

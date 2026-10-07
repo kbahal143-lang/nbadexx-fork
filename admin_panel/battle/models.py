@@ -137,7 +137,6 @@ class BattleShowcase(models.Model):
     discord_id = models.BigIntegerField(unique=True)
     instance_id = models.BigIntegerField()   # exact BallInstance pk the user chose
     art_type = models.CharField(max_length=10, default="card")
-
     class Meta:
         db_table = "battle_showcase"
         verbose_name = "Battle Showcase"

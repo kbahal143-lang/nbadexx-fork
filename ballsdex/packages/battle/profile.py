@@ -15,10 +15,14 @@ from discord import app_commands
 from discord.ext import commands
 from tortoise.exceptions import DoesNotExist
 
-from ballsdex.core.models import Ball, BallInstance, Player
+from ballsdex.core.models import BallInstance, Player
 from ballsdex.core.utils.transformers import BallInstanceTransform
 
-from .models import BattleCardStats, BattleProfile, BattleShowcase
+from .models import (
+    BattleCardStats,
+    BattleProfile,
+    BattleShowcase,
+)
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -199,7 +203,6 @@ class ProfileCog(commands.Cog):
                 embed.set_image(url=f"attachment://{showcase_file.filename}")
 
         embed.set_footer(text="NBADex")
-
         await interaction.followup.send(embed=embed, files=files)
 
 
@@ -236,7 +239,7 @@ class SetCog(commands.GroupCog, group_name="set"):
         card: BallInstanceTransform,
         art: app_commands.Choice[str],
     ):
-        """Set the card shown at the bottom of your /profile."""
+        """Set the card shown on your /profile."""
         await interaction.response.defer(ephemeral=True)
 
         inst = await BallInstance.get(pk=card.pk).prefetch_related("ball", "special")
@@ -264,7 +267,10 @@ class SetCog(commands.GroupCog, group_name="set"):
         # Save the exact instance ID so /profile renders this card's specific special
         showcase, created = await BattleShowcase.get_or_create(
             discord_id=interaction.user.id,
-            defaults={"instance_id": inst.pk, "art_type": art_type},
+            defaults={
+                "instance_id": inst.pk,
+                "art_type": art_type,
+            },
         )
         if not created:
             showcase.instance_id = inst.pk

@@ -31,9 +31,9 @@ from ballsdex.packages.balls.countryballs_paginator import CountryballsSource
 from ballsdex.packages.coins.models import Pack, PlayerMoney, PlayerPack
 from ballsdex.packages.coins.transformers import PackTransform
 
-from .models import PlayerPosition, Team, MatchResult, BattleProfile, BattleCardStats
+from .models import Team, MatchResult, BattleProfile, BattleCardStats
 from .simulation import build_sim_teams, run_match
-from .team import get_or_detect_position, is_base_card
+from .team import find_ineligible_slots, find_ineligible_team_slots
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -646,6 +646,15 @@ class MatchCog(commands.GroupCog, group_name="match"):
                 ephemeral=True,
             )
             return
+        ch_ineligible = await find_ineligible_team_slots(ch_team)
+        if ch_ineligible:
+            await interaction.followup.send(
+                "❌ Your lineup contains card(s) that are not eligible for battle: "
+                f"{', '.join(ch_ineligible)}. Every card must have a matching basketball "
+                "position assigned.",
+                ephemeral=True,
+            )
+            return
 
         # Check challenged has a complete team
         cd_player = await Player.get_or_none(discord_id=member.id)
@@ -667,6 +676,15 @@ class MatchCog(commands.GroupCog, group_name="match"):
             await interaction.followup.send(
                 f"❌ **{member.display_name}**'s lineup isn't full. "
                 "They need all 5 positions filled before they can be challenged.",
+                ephemeral=True,
+            )
+            return
+        cd_ineligible = await find_ineligible_team_slots(cd_team)
+        if cd_ineligible:
+            await interaction.followup.send(
+                f"❌ **{member.display_name}** has card(s) that are not eligible for battle: "
+                f"{', '.join(cd_ineligible)}. Every card must have a matching basketball "
+                "position assigned.",
                 ephemeral=True,
             )
             return
@@ -1286,6 +1304,31 @@ class MatchCog(commands.GroupCog, group_name="match"):
                         parts.append(f"{cd_name} is missing positions: {', '.join(missing_b)}")
                     await channel.send(
                         "❌ Match cancelled — one or both lineups are incomplete:\n"
+                        + "\n".join(parts)
+                    )
+            except Exception:
+                pass
+            return
+
+        ineligible_a = await find_ineligible_slots(slots_a)
+        ineligible_b = await find_ineligible_slots(slots_b)
+        if ineligible_a or ineligible_b:
+            session.status = "staking"
+            await self.cancel_match(session, cancelled_by=None, reason="cancelled")
+            try:
+                channel = self.bot.get_channel(session.channel_id)
+                if channel:
+                    parts = []
+                    if ineligible_a:
+                        parts.append(
+                            f"{ch_name} has ineligible card(s) in: {', '.join(ineligible_a)}"
+                        )
+                    if ineligible_b:
+                        parts.append(
+                            f"{cd_name} has ineligible card(s) in: {', '.join(ineligible_b)}"
+                        )
+                    await channel.send(
+                        "❌ Match cancelled — one or more cards are not eligible for battle.\n"
                         + "\n".join(parts)
                     )
             except Exception:

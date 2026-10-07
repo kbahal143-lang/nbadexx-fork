@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.forms import Textarea
 from django.utils.safestring import mark_safe
 
-from ..models import Special
+from ..models import Special, image_display
 
 if TYPE_CHECKING:
     from django.db.models import Field
@@ -14,11 +14,21 @@ if TYPE_CHECKING:
 @admin.register(Special)
 class SpecialAdmin(admin.ModelAdmin):
     save_on_top = True
+    readonly_fields = ("overlay_image",)
     fieldsets = [
         (
             None,
             {
-                "fields": ["name", "catch_phrase", "rarity", "emoji", "background", "credits"],
+                "fields": [
+                    "name",
+                    "catch_phrase",
+                    "rarity",
+                    "emoji",
+                    "background",
+                    "overlay_image",
+                    "card_overlay",
+                    "credits",
+                ],
             },
         ),
         (
@@ -80,6 +90,12 @@ class SpecialAdmin(admin.ModelAdmin):
             if obj.emoji and obj.emoji.isdigit()
             else obj.emoji
         )
+
+    @admin.display(description="Current card overlay")
+    def overlay_image(self, obj: Special):
+        if not obj.card_overlay:
+            return mark_safe("<i>None</i>")
+        return image_display(str(obj.card_overlay))
 
     def formfield_for_dbfield(
         self, db_field: "Field[Any, Any]", request: "HttpRequest | None", **kwargs: Any

@@ -57,9 +57,6 @@ class PlayerSim:
 
     @property
     def short_name(self) -> str:
-        parts = self.name.split()
-        if len(parts) >= 2:
-            return f"{parts[0][0]}. {parts[-1]}"
         return self.name
 
 
@@ -507,7 +504,7 @@ def build_player_sim(inst, position: str) -> PlayerSim:
         offense += getattr(special, "battle_atk_bonus", 0)
         defense += getattr(special, "battle_def_bonus", 0)
     return PlayerSim(
-        name=inst.ball.country,
+        name=inst.ball.short_name or inst.ball.country,
         position=position,
         offense=max(1, offense),
         defense=max(1, defense),

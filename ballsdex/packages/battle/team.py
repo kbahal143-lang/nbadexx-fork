@@ -1,10 +1,9 @@
 """
 /team command group for the Battle package.
-Commands work with any tradeable base player card (enabled or disabled).
+Commands work with any tradeable card that has an assigned basketball position.
 """
 
 import logging
-import re
 from typing import TYPE_CHECKING
 
 import discord
@@ -18,7 +17,7 @@ from ballsdex.core.utils.transformers import BallInstanceTransform
 from ballsdex.settings import settings
 
 from .models import PlayerPosition, Team
-from .positions import POSITION_LABELS, get_position_for_name
+from .positions import POSITION_LABELS
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -31,18 +30,6 @@ log = logging.getLogger("ballsdex.packages.battle")
 # ──────────────────────────────────────────────────────────
 BATTLE_GUILD_ID = 1440962506796433519
 
-# Strip a leading season prefix like "2025-26 " or "2025-2026 " so season-tagged
-# cards (e.g. "2025-26 LeBron James") are still treated as base cards in battles.
-_SEASON_PREFIX_RE = re.compile(r"^\s*\d{4}-\d{2,4}\s+")
-
-
-def _strip_season_prefix(name: str) -> str:
-    return _SEASON_PREFIX_RE.sub("", name)
-
-
-# Exclude digits, parentheses and brackets — allows accented/unicode names like Jokić, Şengün
-_BASE_CARD_RE = re.compile(r"^[^\d\(\)\[\]]+$")
-
 POSITION_CHOICES = [
     app_commands.Choice(name="Point Guard (PG)", value="PG"),
     app_commands.Choice(name="Shooting Guard (SG)", value="SG"),
@@ -52,31 +39,34 @@ POSITION_CHOICES = [
 ]
 
 
-def is_base_card(ball: Ball) -> bool:
-    """Returns True if this is a simple player-name card (enabled or disabled).
-    A leading season prefix (e.g. "2025-26 ") is stripped before checking,
-    so season-tagged player cards still qualify."""
-    cleaned = _strip_season_prefix(ball.country)
-    return bool(_BASE_CARD_RE.match(cleaned))
+async def get_assigned_position(ball: Ball) -> PlayerPosition | None:
+    """Return the position explicitly assigned to this ball, if one exists."""
+    return await PlayerPosition.get_or_none(ball_id=ball.pk)
 
 
-async def get_or_detect_position(ball: Ball) -> PlayerPosition | None:
-    """
-    Return the PlayerPosition for this ball.
-    Auto-creates from NBA_POSITIONS dict if not already in DB.
-    """
-    try:
-        return await PlayerPosition.get(ball_id=ball.pk)
-    except DoesNotExist:
-        pass
+async def find_ineligible_slots(slots: dict[str, BallInstance | None]) -> list[str]:
+    """Return lineup slots whose cards lack an assigned or matching position."""
+    ineligible: list[str] = []
+    for position, instance in slots.items():
+        if instance is None:
+            continue
+        position_record = await get_assigned_position(instance.ball)
+        if position_record is None or not position_record.allows(position):
+            ineligible.append(position)
+    return ineligible
 
-    name = _strip_season_prefix(ball.country)
-    pos = get_position_for_name(name)
-    if pos is not None:
-        primary, secondary = pos
-        return await PlayerPosition.create(ball_id=ball.pk, primary=primary, secondary=secondary)
 
-    return None
+async def find_ineligible_team_slots(team: Team) -> list[str]:
+    """Validate every filled team slot against its admin-assigned position."""
+    slots: dict[str, BallInstance | None] = {}
+    for position in ("PG", "SG", "SF", "PF", "C"):
+        instance_id = team.get_slot_id(position)
+        slots[position] = (
+            await BallInstance.get_or_none(pk=instance_id).prefetch_related("ball")
+            if instance_id
+            else None
+        )
+    return await find_ineligible_slots(slots)
 
 
 def _score_instance(inst: BallInstance, position: str) -> float:
@@ -130,32 +120,22 @@ class TeamCog(commands.GroupCog, group_name="team"):
         ball = inst.ball
         pos = position.value
 
-        # 1. Must be a base player card (enabled or disabled, tradeable is checked below)
-        if not is_base_card(ball):
-            await interaction.followup.send(
-                f"❌ **{ball.country}** is not a base player card.\n"
-                "Only cards with simple player names (no years, no special tags) can be in your lineup.",
-                ephemeral=True,
-            )
-            return
-
-        # 2. Must belong to the user
+        # 1. Must belong to the user
         player = await Player.get_or_none(discord_id=interaction.user.id)
         if not player or inst.player_id != player.pk:
             await interaction.followup.send("❌ You don't own that card.", ephemeral=True)
             return
 
-        # 3. Must have a known position
-        pp = await get_or_detect_position(ball)
+        # 2. Must have an administrator-assigned position
+        pp = await get_assigned_position(ball)
         if pp is None:
             await interaction.followup.send(
-                f"❌ **{ball.country}** doesn't have a known basketball position yet.\n"
-                "Ask an admin to assign one via the admin panel.",
+                "This card is not eligible for battle.",
                 ephemeral=True,
             )
             return
 
-        # 4. Position must be allowed
+        # 3. Position must be allowed
         if not pp.allows(pos):
             allowed = pp.display()
             await interaction.followup.send(
@@ -165,7 +145,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
             )
             return
 
-        # 5. Card must not be locked elsewhere (match stake, bet, etc.)
+        # 4. Card must not be locked elsewhere (match stake, bet, etc.)
         if not inst.tradeable:
             await interaction.followup.send(
                 f"❌ **{ball.country}** is currently locked (staked in a match or bet).",
@@ -173,7 +153,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
             )
             return
 
-        # 6. Card must not already be on this team (same slot or any other slot)
+        # 5. Card must not already be on this team (same slot or any other slot)
         team, _ = await Team.get_or_create(player=player)
         for check_pos in ("PG", "SG", "SF", "PF", "C"):
             existing_id = team.get_slot_id(check_pos)
@@ -304,16 +284,20 @@ class TeamCog(commands.GroupCog, group_name="team"):
             .prefetch_related("ball", "special")
         )
 
-        base_insts = [i for i in all_insts if is_base_card(i.ball)]
-        if not base_insts:
+        eligible_insts = [
+            i for i in all_insts if await get_assigned_position(i.ball) is not None
+        ]
+        if not eligible_insts:
             await interaction.followup.send(
-                "You don't have any eligible base player cards.", ephemeral=True
+                "You don't have any eligible cards. Cards need an assigned basketball "
+                "position before they can be used in battle.",
+                ephemeral=True,
             )
             return
 
         pos_map: dict[int, PlayerPosition] = {}
-        for inst in base_insts:
-            pp = await get_or_detect_position(inst.ball)
+        for inst in eligible_insts:
+            pp = await get_assigned_position(inst.ball)
             if pp:
                 pos_map[inst.pk] = pp
 
@@ -325,7 +309,7 @@ class TeamCog(commands.GroupCog, group_name="team"):
         for pos in ("PG", "SG", "SF", "PF", "C"):
             # Combine primary and secondary — best stats wins regardless of which it is
             candidates = [
-                i for i in base_insts
+                i for i in eligible_insts
                 if i.pk in pos_map
                 and pos_map[i.pk].allows(pos)
                 and i.pk not in assigned

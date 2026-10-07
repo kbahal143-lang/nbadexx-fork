@@ -1,5 +1,7 @@
 from django.db import models
 
+from ballsdex.core.image_generator.font_catalog import FONT_CHOICES
+
 
 GRADIENT_DIR_CHOICES = [
     ("horizontal", "Horizontal (left → right)"),
@@ -30,6 +32,18 @@ class CardStyle(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # ── CARD FONT (independent from gradient/color styling) ─────────────────
+    font_family = models.CharField(
+        max_length=32,
+        choices=FONT_CHOICES,
+        default="default",
+        verbose_name="Card Font",
+        help_text=(
+            "Changes every text element on assigned cards. "
+            "Original NBADex fonts remain the default."
+        ),
+    )
 
     # ── CARD NAME (top title) ──────────────────────────────────────────────
     title_color = models.CharField(max_length=7, default="#FFFFFF", verbose_name="Color")

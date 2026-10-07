@@ -107,6 +107,14 @@ class Special(models.Model):
         description="Value between 0 and 1, chances of using this special background."
     )
     background = fields.CharField(max_length=200, description="1428x2000 PNG image", null=True)
+    card_overlay = fields.CharField(
+        max_length=200,
+        null=True,
+        description=(
+            "Optional overlay for special cards; takes precedence over a ball overlay "
+            "and is drawn below generated card details."
+        ),
+    )
     emoji = fields.CharField(
         max_length=20,
         description="Either a unicode character or a discord emoji ID",

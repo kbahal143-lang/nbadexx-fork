@@ -1,6 +1,8 @@
 """
-NBA player positions for the Battle system — 2025-26 season (full rosters, March 28 2026).
-Maps player names to (primary, secondary) positions.
+ Reference NBA player positions for the Battle system.
+ This registry is retained for reference only and is not used to make a card
+ eligible for battle. Eligibility now comes only from an explicit
+ PlayerPosition record assigned through the admin panel.
 Positions: PG, SG, SF, PF, C
 
 Name lookup is accent-insensitive and case-insensitive.

@@ -84,6 +84,13 @@ class CardStyleAdmin(admin.ModelAdmin):
                 "</div>"
             ),
         }),
+        ("🔤 Card Font (whole card)", {
+            "fields": ("font_family",),
+            "description": (
+                "<em>Optional per-card typography. This is separate from all gradient and color "
+                "settings. Choose Original NBADex fonts to keep the existing look.</em>"
+            ),
+        }),
         ("🏷️ Card Name (top title)", {
             "fields": (
                 "title_color",

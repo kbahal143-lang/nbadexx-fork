@@ -144,6 +144,5 @@ class BattleShowcase(Model):
     discord_id = fields.BigIntField(unique=True)
     instance_id = fields.BigIntField()   # exact BallInstance.pk the user chose
     art_type = fields.CharField(max_length=10, default="card")  # "spawn" or "card"
-
     class Meta:
         table = "battle_showcase"

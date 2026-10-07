@@ -16,6 +16,7 @@ from ballsdex.core.models import BallInstance, Player
 
 from .models import Team
 from .simulation import build_sim_teams, run_match
+from .team import find_ineligible_team_slots
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -154,6 +155,15 @@ class TournamentJoinView(discord.ui.View):
         if not team.is_complete():
             await interaction.response.send_message(
                 "Your lineup isn't complete — you need all 5 positions filled.",
+                ephemeral=True,
+            )
+            return
+        ineligible = await find_ineligible_team_slots(team)
+        if ineligible:
+            await interaction.response.send_message(
+                "Your lineup has card(s) that are not eligible for battle: "
+                f"{', '.join(ineligible)}. Every card must have a matching basketball "
+                "position assigned.",
                 ephemeral=True,
             )
             return

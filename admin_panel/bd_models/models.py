@@ -161,6 +161,15 @@ class Special(models.Model):
     background = models.ImageField(
         max_length=200, blank=True, null=True, help_text="1428x2000 PNG image"
     )
+    card_overlay = models.ImageField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text=(
+            "Optional image drawn over this special card's artwork and below its generated "
+            "text and details. This takes precedence over the base card's overlay."
+        ),
+    )
     tradeable = models.BooleanField(
         help_text="Whether balls of this event can be traded", default=True
     )
@@ -214,7 +223,10 @@ class Ball(models.Model):
         max_length=200,
         blank=True,
         null=True,
-        help_text="Optional image overlaid on top of the finished card (drawn last).",
+        help_text=(
+            "Optional image drawn over the collection artwork and below the card name, "
+            "economy icon, stats, ability and credits."
+        ),
     )
     card_full_override = models.ImageField(
         max_length=200,
